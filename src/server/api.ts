@@ -20,6 +20,7 @@ import {
   listAgents,
   listRepos,
   listTasks,
+  recordNote,
   releaseTask,
   setStatus,
   updateTask,
@@ -260,6 +261,25 @@ export function createApiRouter(): Router {
         limit: req.query['limit'] ? Number(req.query['limit']) : undefined,
       }),
     );
+  });
+
+  /**
+   * Record a free-form activity note (not tied to a task). Agent hooks post
+   * here to report presence and what they're working on.
+   */
+  api.post('/activity', (req: Request, res: Response) => {
+    const message = String(req.body?.message ?? '').trim();
+    if (!message) {
+      res.status(400).json({ error: 'message is required' });
+      return;
+    }
+    recordNote({
+      agent: req.body?.agent ? String(req.body.agent) : undefined,
+      repo: req.body?.repo ? String(req.body.repo) : undefined,
+      kind: req.body?.kind ? String(req.body.kind) : undefined,
+      message,
+    });
+    res.status(201).json({ ok: true });
   });
 
   return api;

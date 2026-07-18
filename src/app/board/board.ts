@@ -168,6 +168,9 @@ export class Board {
         return `${who} → ${a.message} on #${a.task_id}`;
       case 'comment':
         return `${who}: ${a.message}`;
+      case 'note':
+      case 'prompt':
+        return `${who} ✎ ${a.message}`;
       default:
         return `${who} ${a.kind} ${a.message}`.trim();
     }

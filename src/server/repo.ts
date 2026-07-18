@@ -323,6 +323,25 @@ export function commentTask(id: number, agent: string, message: string): void {
   });
 }
 
+/**
+ * Record a free-form activity note that isn't tied to a task lifecycle action.
+ * Used by agent hooks (e.g. Claude Code's UserPromptSubmit) to report presence
+ * and what they're currently being asked to work on.
+ */
+export function recordNote(input: {
+  agent?: string;
+  repo?: string;
+  kind?: string;
+  message: string;
+}): void {
+  logActivity({
+    agent: input.agent ?? null,
+    repo: input.repo ?? null,
+    kind: input.kind ?? 'note',
+    message: input.message,
+  });
+}
+
 /** Read the activity feed, newest first. */
 export function listActivity(query: { repo?: string; limit?: number } = {}): Activity[] {
   const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);

@@ -82,6 +82,38 @@ task at the same instant, exactly one gets exit code `0`; the other gets exit
 code `2` and the name of the winner. That is what stops duplicate work — see
 [AGENTS.md](./AGENTS.md) for the protocol every agent should follow.
 
+## Automatic reporting (Claude Code hook)
+
+By default nothing is posted automatically — agents only write to the board when
+they run `agentboard`. To make a Claude Code session report on its own, install
+the `UserPromptSubmit` hook, which fires **every time you send a message**:
+
+```bash
+ln -sf /home/lollo/Playground/agent-board/hooks/claude-user-prompt.mjs \
+       ~/.claude/hooks/agent-board-user-prompt.mjs
+```
+
+Then add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command",
+        "command": "$HOME/.claude/hooks/agent-board-user-prompt.mjs" } ] }
+    ]
+  }
+}
+```
+
+On each message the hook **heartbeats** the session and logs a short **note** of
+what you asked, tagged with the current repo (the cwd's basename). It is silent,
+non-blocking, and never fails the prompt if the board is down. Identity defaults
+to `claude-<host>-<session>`; set `AGENT_BOARD_NAME` to pin it.
+
+> Codex has no per-message hook, but agents there follow the same protocol via
+> [AGENTS.md](./AGENTS.md) and the `agentboard` CLI.
+
 ## REST API
 
 Base URL `http://localhost:<port>/api`. All bodies and responses are JSON.
@@ -102,6 +134,7 @@ Base URL `http://localhost:<port>/api`. All bodies and responses are JSON.
 | `POST`   | `/tasks/:id/comment`      | `{agent, message}`                                |
 | `GET`    | `/repos`                  | Distinct repo names                               |
 | `GET`    | `/activity?repo=&limit=`  | Append-only activity feed                         |
+| `POST`   | `/activity`               | `{message, agent?, repo?, kind?}` — free-form note |
 
 Task statuses: `todo → claimed → in_progress → { done | blocked }`, plus
 `abandoned`. A task in `todo` or `abandoned` is free to claim.
