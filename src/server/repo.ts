@@ -56,8 +56,19 @@ export interface Activity {
   created_at: number;
 }
 
+export interface MailMessage {
+  id: number;
+  sender: string;
+  recipient: string;
+  body: string;
+  thread_id: string | null;
+  created_at: number;
+  acked_at: number | null;
+}
+
 /** Statuses that leave a task free for another agent to pick up. */
 const CLAIMABLE_STATES: TaskStatus[] = ['todo', 'abandoned'];
+export const ARCHIVE_AFTER_MS = 15 * 60 * 1000;
 
 /** Record an entry in the activity feed. Best-effort, never throws to caller. */
 function logActivity(entry: {
@@ -125,8 +136,9 @@ export interface TaskQuery {
 
 /** List tasks, newest first, optionally filtered by repo/status/search. */
 export function listTasks(query: TaskQuery = {}): Task[] {
-  const clauses: string[] = [];
+  const clauses: string[] = [`(status != 'done' OR updated_at >= @archive_cutoff)`];
   const params: Record<string, string | number> = {};
+  params['archive_cutoff'] = now() - ARCHIVE_AFTER_MS;
   if (query.repo) {
     clauses.push('repo = @repo');
     params['repo'] = query.repo;
@@ -144,6 +156,57 @@ export function listTasks(query: TaskQuery = {}): Task[] {
     .prepare(
       `SELECT * FROM tasks ${where}
        ORDER BY priority DESC, created_at DESC`,
+    )
+    .all(params) as unknown as Task[];
+}
+
+/** Recently completed work shown briefly outside the active workflow lanes. */
+export function listRecentlyCompleted(query: {
+  repo?: string;
+  limit?: number;
+} = {}): Task[] {
+  const limit = Math.min(Math.max(query.limit ?? 8, 1), 50);
+  const clauses = [`status = 'done'`, `updated_at >= @archive_cutoff`];
+  const params: Record<string, string | number> = {
+    archive_cutoff: now() - ARCHIVE_AFTER_MS,
+    limit,
+  };
+  if (query.repo) {
+    clauses.push('repo = @repo');
+    params['repo'] = query.repo;
+  }
+  return db()
+    .prepare(
+      `SELECT * FROM tasks WHERE ${clauses.join(' AND ')}
+       ORDER BY updated_at DESC LIMIT @limit`,
+    )
+    .all(params) as unknown as Task[];
+}
+
+/** Search completed work once it has aged out of the operational board. */
+export function listArchivedTasks(query: {
+  repo?: string;
+  q?: string;
+  limit?: number;
+} = {}): Task[] {
+  const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
+  const clauses = [`status = 'done'`, `updated_at < @archive_cutoff`];
+  const params: Record<string, string | number> = {
+    archive_cutoff: now() - ARCHIVE_AFTER_MS,
+    limit,
+  };
+  if (query.repo) {
+    clauses.push('repo = @repo');
+    params['repo'] = query.repo;
+  }
+  if (query.q) {
+    clauses.push('(title LIKE @like OR body LIKE @like OR tags LIKE @like OR created_by LIKE @like)');
+    params['like'] = `%${query.q}%`;
+  }
+  return db()
+    .prepare(
+      `SELECT * FROM tasks WHERE ${clauses.join(' AND ')}
+       ORDER BY updated_at DESC LIMIT @limit`,
     )
     .all(params) as unknown as Task[];
 }
@@ -204,6 +267,32 @@ export type ClaimResult =
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'conflict'; task: Task };
 
+export type ReleaseResult =
+  | { ok: true; task: Task }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'conflict'; task: Task };
+
+export type StatusResult =
+  | { ok: true; task: Task }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'conflict'; task: Task }
+  | { ok: false; reason: 'invalid_transition'; task: Task };
+
+const STATUS_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
+  todo: ['abandoned'],
+  claimed: ['in_progress', 'abandoned'],
+  in_progress: ['blocked', 'done', 'abandoned'],
+  blocked: ['in_progress', 'abandoned'],
+  done: ['todo'],
+  abandoned: ['todo'],
+};
+
+const OWNED_STATES: readonly TaskStatus[] = [
+  'claimed',
+  'in_progress',
+  'blocked',
+];
+
 /**
  * Atomically claim a task for `agent`.
  *
@@ -220,7 +309,7 @@ export function claimTask(id: number, agent: string): ClaimResult {
       `UPDATE tasks
          SET status = 'claimed', claimed_by = ?, claimed_at = ?, updated_at = ?
        WHERE id = ?
-         AND (status IN (${placeholders}) OR claimed_by = ?)`,
+         AND (status IN (${placeholders}) OR (status = 'claimed' AND claimed_by = ?))`,
     )
     .run(agent, ts, ts, id, ...CLAIMABLE_STATES, agent);
 
@@ -236,20 +325,24 @@ export function claimTask(id: number, agent: string): ClaimResult {
 }
 
 /** Release a claim, returning the task to `todo`. */
-export function releaseTask(id: number, agent: string): Task | undefined {
+export function releaseTask(id: number, agent: string): ReleaseResult {
   const ts = now();
-  db()
+  const result = db()
     .prepare(
       `UPDATE tasks
          SET status = 'todo', claimed_by = NULL, claimed_at = NULL, updated_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND status = 'claimed' AND claimed_by = ?`,
     )
-    .run(ts, id);
+    .run(ts, id, agent);
   const task = getTask(id);
-  if (task) {
-    logActivity({ task_id: id, agent, repo: task.repo, kind: 'released' });
+  if (!task) {
+    return { ok: false, reason: 'not_found' };
   }
-  return task;
+  if (result.changes === 0) {
+    return { ok: false, reason: 'conflict', task };
+  }
+  logActivity({ task_id: id, agent, repo: task.repo, kind: 'released' });
+  return { ok: true, task };
 }
 
 /** Change a task's status (e.g. in_progress, blocked, done). */
@@ -258,22 +351,45 @@ export function setStatus(
   status: TaskStatus,
   agent?: string,
   message?: string,
-): Task | undefined {
-  const ts = now();
-  db()
-    .prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`)
-    .run(status, ts, id);
-  const task = getTask(id);
-  if (task) {
-    logActivity({
-      task_id: id,
-      agent,
-      repo: task.repo,
-      kind: 'status',
-      message: message ? `${status}: ${message}` : status,
-    });
+): StatusResult {
+  const existing = getTask(id);
+  if (!existing) {
+    return { ok: false, reason: 'not_found' };
   }
-  return task;
+  if (!STATUS_TRANSITIONS[existing.status].includes(status)) {
+    return { ok: false, reason: 'invalid_transition', task: existing };
+  }
+  if (
+    OWNED_STATES.includes(existing.status) &&
+    (!agent || existing.claimed_by !== agent)
+  ) {
+    return { ok: false, reason: 'conflict', task: existing };
+  }
+
+  const ts = now();
+  const clearsClaim = status === 'todo' || status === 'done' || status === 'abandoned';
+  db()
+    .prepare(
+      `UPDATE tasks
+          SET status = ?,
+              claimed_by = CASE WHEN ? THEN NULL ELSE claimed_by END,
+              claimed_at = CASE WHEN ? THEN NULL ELSE claimed_at END,
+              updated_at = ?
+        WHERE id = ?`,
+    )
+    .run(status, clearsClaim ? 1 : 0, clearsClaim ? 1 : 0, ts, id);
+  const task = getTask(id);
+  if (!task) {
+    return { ok: false, reason: 'not_found' };
+  }
+  logActivity({
+    task_id: id,
+    agent,
+    repo: task.repo,
+    kind: 'status',
+    message: message ? `${status}: ${message}` : status,
+  });
+  return { ok: true, task };
 }
 
 /** Partially update editable fields of a task. */
@@ -312,15 +428,19 @@ export function deleteTask(id: number): boolean {
 }
 
 /** Post a free-form comment against a task. */
-export function commentTask(id: number, agent: string, message: string): void {
+export function commentTask(id: number, agent: string, message: string): boolean {
   const task = getTask(id);
+  if (!task) {
+    return false;
+  }
   logActivity({
     task_id: id,
     agent,
-    repo: task?.repo ?? null,
+    repo: task.repo,
     kind: 'comment',
     message,
   });
+  return true;
 }
 
 /**
@@ -355,4 +475,70 @@ export function listActivity(query: { repo?: string; limit?: number } = {}): Act
   return db()
     .prepare(`SELECT * FROM activity ORDER BY created_at DESC LIMIT ?`)
     .all(limit) as unknown as Activity[];
+}
+
+/** Store a message for another agent. Delivery is pull-based through its inbox. */
+export function sendMessage(input: {
+  sender: string;
+  recipient: string;
+  body: string;
+  thread_id?: string;
+}): MailMessage {
+  const result = db()
+    .prepare(
+      `INSERT INTO messages (sender, recipient, body, thread_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.sender,
+      input.recipient,
+      input.body,
+      input.thread_id?.trim() || null,
+      now(),
+    );
+  return db()
+    .prepare(`SELECT * FROM messages WHERE id = ?`)
+    .get(Number(result.lastInsertRowid)) as unknown as MailMessage;
+}
+
+/** Read an agent inbox in ascending order so cursors advance naturally. */
+export function readInbox(input: {
+  agent: string;
+  after_id?: number;
+  limit?: number;
+  include_acknowledged?: boolean;
+}): MailMessage[] {
+  const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+  return db()
+    .prepare(
+      `SELECT * FROM messages
+       WHERE recipient = @agent
+         AND id > @after_id
+         AND (@include_acknowledged = 1 OR acked_at IS NULL)
+       ORDER BY id ASC
+       LIMIT @limit`,
+    )
+    .all({
+      agent: input.agent,
+      after_id: input.after_id ?? 0,
+      include_acknowledged: input.include_acknowledged ? 1 : 0,
+      limit,
+    }) as unknown as MailMessage[];
+}
+
+/** Acknowledge one message, only when the caller is its intended recipient. */
+export function acknowledgeMessage(
+  id: number,
+  agent: string,
+): MailMessage | undefined {
+  db()
+    .prepare(
+      `UPDATE messages
+       SET acked_at = COALESCE(acked_at, ?)
+       WHERE id = ? AND recipient = ?`,
+    )
+    .run(now(), id, agent);
+  return db()
+    .prepare(`SELECT * FROM messages WHERE id = ? AND recipient = ?`)
+    .get(id, agent) as unknown as MailMessage | undefined;
 }

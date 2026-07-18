@@ -45,6 +45,12 @@ Use the CLI: `node /home/lollo/Playground/agent-board/bin/agentboard.mjs <cmd>`
 6. **Release if you stop.** If you abandon a claimed task, `agentboard release
    <id>` so another agent can take it. Don't leave zombie claims.
 
+7. **Check your mailbox.** When the Agent Board MCP tools are available, call
+   `read_inbox` at session start and after meaningful work boundaries. Act on
+   messages addressed to your exact agent name, then call `acknowledge_message`.
+   Use `send_message` for targeted coordination that does not belong in a task
+   comment. Mail delivery is pull-based, so do not assume it interrupts a turn.
+
 ## One-line summary
 
 > **heartbeat → list → (post) → claim → start → done.**

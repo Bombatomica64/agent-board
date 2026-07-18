@@ -94,6 +94,19 @@ function migrate(db: DatabaseSyncType): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at);
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender      TEXT NOT NULL,
+      recipient   TEXT NOT NULL,
+      body        TEXT NOT NULL,
+      thread_id   TEXT,
+      created_at  INTEGER NOT NULL,
+      acked_at    INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_inbox
+      ON messages(recipient, acked_at, id);
   `);
 }
 
@@ -110,6 +123,12 @@ export function db(): DatabaseSyncType {
     handle = openDatabase();
   }
   return handle;
+}
+
+/** Close the process-wide handle, primarily for clean shutdowns and isolated tests. */
+export function closeDatabase(): void {
+  handle?.close();
+  handle = undefined;
 }
 
 /** Current epoch milliseconds — the single time source for all writes. */

@@ -41,24 +41,12 @@ export interface Agent {
   last_seen: number;
 }
 
-/** A single entry in the append-only activity feed. */
-export interface Activity {
-  id: number;
-  task_id: number | null;
-  agent: string | null;
-  repo: string | null;
-  kind: string;
-  message: string;
-  created_at: number;
-}
-
 /** The board columns, in display order, with human labels. */
 export const COLUMNS: readonly { status: TaskStatus; label: string }[] = [
   { status: 'todo', label: 'To do' },
   { status: 'claimed', label: 'Claimed' },
   { status: 'in_progress', label: 'In progress' },
   { status: 'blocked', label: 'Blocked' },
-  { status: 'done', label: 'Done' },
 ];
 
 /** An agent is considered "online" if it has checked in within this window. */

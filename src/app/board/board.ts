@@ -2,7 +2,7 @@
  * The board page: the human-facing view of the shared agent bulletin board.
  *
  * It renders tasks as cards grouped into status columns, shows which agents are
- * online, streams the activity feed, and lets a human (identifying as one of
+ * online, shows recently completed work, and lets a human (identifying as one of
  * the agents, or as themselves) create, claim, and move tasks. All reads come
  * from {@link BoardService}, which polls so other agents' changes appear live.
  */
@@ -20,7 +20,6 @@ import { BoardService } from './board.service';
 import {
   COLUMNS,
   ONLINE_WINDOW_MS,
-  type Activity,
   type Agent,
   type Task,
   type TaskStatus,
@@ -51,6 +50,7 @@ export class Board {
   protected readonly draftTags = signal('');
   protected readonly draftPriority = signal(0);
   protected readonly formOpen = signal(false);
+  protected readonly archiveOpen = signal(false);
 
   /** Tasks grouped by status, so each column can read its bucket directly. */
   protected readonly grouped = computed(() => {
@@ -111,20 +111,58 @@ export class Board {
     this.board.repoFilter.set(value ? value : null);
   }
 
+  protected onIdentityInput(event: Event): void {
+    this.identity.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onRepoFilterChange(event: Event): void {
+    this.onRepoFilter((event.target as HTMLSelectElement).value);
+  }
+
+  protected onSearchInput(event: Event): void {
+    this.board.search.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onArchiveSearchInput(event: Event): void {
+    this.board.archiveSearch.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onDraftInput(
+    field: 'title' | 'repo' | 'tags' | 'body',
+    event: Event,
+  ): void {
+    const value = (event.target as HTMLInputElement | HTMLTextAreaElement).value;
+    const target = {
+      title: this.draftTitle,
+      repo: this.draftRepo,
+      tags: this.draftTags,
+      body: this.draftBody,
+    }[field];
+    target.set(value);
+  }
+
+  protected onPriorityInput(event: Event): void {
+    this.draftPriority.set(Number((event.target as HTMLInputElement).value) || 0);
+  }
+
   /** Submit the new-task form. */
   protected async submit(): Promise<void> {
     const title = this.draftTitle().trim();
     if (!title) {
       return;
     }
-    await this.board.createTask({
-      title,
-      repo: this.draftRepo().trim() || 'global',
-      body: this.draftBody().trim(),
-      tags: this.draftTags().trim(),
-      priority: Number(this.draftPriority()) || 0,
-      agent: this.identity(),
-    });
+    try {
+      await this.board.createTask({
+        title,
+        repo: this.draftRepo().trim() || 'global',
+        body: this.draftBody().trim(),
+        tags: this.draftTags().trim(),
+        priority: Number(this.draftPriority()) || 0,
+        agent: this.identity(),
+      });
+    } catch {
+      return;
+    }
     this.draftTitle.set('');
     this.draftBody.set('');
     this.draftTags.set('');
@@ -134,45 +172,29 @@ export class Board {
 
   /** Try to claim a task; surface a message if another agent beat us to it. */
   protected async claim(task: Task): Promise<void> {
-    const ok = await this.board.claim(task.id, this.identity());
-    if (!ok && this.isBrowser) {
-      alert('That task was already claimed by another agent.');
-    }
+    await this.safely(() => this.board.claim(task.id, this.identity()));
   }
 
-  protected release(task: Task): void {
-    void this.board.release(task.id, this.identity());
+  protected async release(task: Task): Promise<void> {
+    await this.safely(() => this.board.release(task.id, this.identity()));
   }
 
-  protected move(task: Task, status: TaskStatus): void {
-    void this.board.setStatus(task.id, status, this.identity());
+  protected async move(task: Task, status: TaskStatus): Promise<void> {
+    await this.safely(() => this.board.setStatus(task.id, status, this.identity()));
   }
 
-  protected remove(task: Task): void {
+  protected async remove(task: Task): Promise<void> {
     if (!this.isBrowser || confirm(`Delete task #${task.id}?`)) {
-      void this.board.remove(task.id);
+      await this.safely(() => this.board.remove(task.id));
     }
   }
 
-  /** Short description line for an activity entry. */
-  protected activityLabel(a: Activity): string {
-    const who = a.agent ?? 'someone';
-    switch (a.kind) {
-      case 'created':
-        return `${who} posted “${a.message}”`;
-      case 'claimed':
-        return `${who} claimed #${a.task_id}`;
-      case 'released':
-        return `${who} released #${a.task_id}`;
-      case 'status':
-        return `${who} → ${a.message} on #${a.task_id}`;
-      case 'comment':
-        return `${who}: ${a.message}`;
-      case 'note':
-      case 'prompt':
-        return `${who} ✎ ${a.message}`;
-      default:
-        return `${who} ${a.kind} ${a.message}`.trim();
+  private async safely(action: () => Promise<unknown>): Promise<void> {
+    try {
+      await action();
+    } catch {
+      // BoardService exposes the actionable error in the page.
     }
   }
+
 }

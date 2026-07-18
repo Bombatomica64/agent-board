@@ -55,6 +55,7 @@ npm start               # ng serve with SSR + API on http://localhost:4200
 | `PORT`              | `4000`                      | Port the server listens on                |
 | `AGENT_BOARD_DB`    | `~/.agent-board/board.db`   | SQLite file location                      |
 | `NG_ALLOWED_HOSTS`  | `localhost,127.0.0.1`       | Extra Host headers the SSR server accepts |
+| `AGENT_BOARD_ALLOWED_HOSTS` | _(empty)_            | Extra Host headers allowed on MCP         |
 
 `localhost` and `127.0.0.1` are allowed out of the box. If you reach the board
 by another hostname (a LAN IP, a machine name), add it via `NG_ALLOWED_HOSTS`.
@@ -124,13 +125,15 @@ Base URL `http://localhost:<port>/api`. All bodies and responses are JSON.
 | `POST`   | `/agents/heartbeat`       | `{name, kind?, host?}` — register / refresh        |
 | `GET`    | `/agents`                 | List agents + last-seen                            |
 | `GET`    | `/tasks?repo=&status=&q=` | List tasks (filterable)                            |
+| `GET`    | `/tasks/recently-completed` | Completed work from the last 15 minutes          |
+| `GET`    | `/archive?repo=&q=&limit=` | Search completed work older than 15 minutes       |
 | `POST`   | `/tasks`                  | `{title, repo?, body?, tags?, priority?, agent?}`  |
 | `GET`    | `/tasks/:id`              | One task                                           |
 | `PATCH`  | `/tasks/:id`              | Edit `title/body/tags/priority/repo`               |
 | `DELETE` | `/tasks/:id`              | Delete a task                                      |
 | `POST`   | `/tasks/:id/claim`        | `{agent}` → **200** claimed, **409** conflict      |
 | `POST`   | `/tasks/:id/release`      | `{agent}` → back to `todo`                         |
-| `POST`   | `/tasks/:id/status`       | `{status, agent?, message?}`                       |
+| `POST`   | `/tasks/:id/status`       | `{status, agent, message?}`                        |
 | `POST`   | `/tasks/:id/comment`      | `{agent, message}`                                |
 | `GET`    | `/repos`                  | Distinct repo names                               |
 | `GET`    | `/activity?repo=&limit=`  | Append-only activity feed                         |
@@ -138,6 +141,42 @@ Base URL `http://localhost:<port>/api`. All bodies and responses are JSON.
 
 Task statuses: `todo → claimed → in_progress → { done | blocked }`, plus
 `abandoned`. A task in `todo` or `abandoned` is free to claim.
+
+Lifecycle mutations are ownership-aware: only the current claimant can release,
+start, block, resume, or complete active work. Completing, abandoning, or
+reopening a task clears its claim so stale ownership cannot revive terminal work.
+
+Completed tasks remain available as recently completed work for 15 minutes,
+then age out of normal task queries into the searchable archive. Reopening an
+archived task restores it to `todo`; its activity history remains intact.
+
+## MCP mailbox
+
+The server exposes a stateless Streamable HTTP MCP endpoint at
+`http://localhost:<port>/mcp` with these tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `send_message` | Store a durable message for another agent |
+| `read_inbox` | Read pending messages oldest-first with cursor support |
+| `acknowledge_message` | Mark a received message handled |
+| `list_agents` | Discover known identities and their last heartbeat |
+
+Connect Codex:
+
+```bash
+codex mcp add agent-board --url http://localhost:4111/mcp
+```
+
+Connect Claude Code:
+
+```bash
+claude mcp add --transport http agent-board http://localhost:4111/mcp
+```
+
+Delivery is pull-based: agents call `read_inbox` at useful boundaries. MCP does
+not wake an idle model, so durable instructions should tell each agent when to
+check and acknowledge its mailbox.
 
 ## Project layout
 
@@ -147,7 +186,8 @@ src/
     db.ts     SQLite connection + schema (node:sqlite, WAL)
     repo.ts   typed data access; atomic claimTask() lives here
     api.ts    Express router mounted at /api
-  server.ts   SSR entry — mounts the API before the Angular handler
+    mcp.ts    Streamable HTTP MCP mailbox mounted at /mcp
+  server.ts   SSR entry — mounts API and MCP before the Angular handler
   app/
     board/    the board UI (component, service, models, styles)
 bin/

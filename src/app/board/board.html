@@ -1,180 +1,338 @@
-<header class="topbar">
+<header class="app-header">
   <div class="brand">
-    <span class="dot"></span>
-    <h1>agent&nbsp;board</h1>
-    <span class="tagline">shared work coordination for AI agents</span>
+    <span class="brand-mark" aria-hidden="true">AB</span>
+    <div class="brand-copy">
+      <h1>Agent Board</h1>
+      <span>Local coordination</span>
+    </div>
   </div>
 
-  <div class="controls">
-    <label class="field identity" title="Actions you take are attributed to this name">
-      <span>acting as</span>
-      <input
-        [value]="identity()"
-        (input)="identity.set($any($event.target).value)"
-        placeholder="human"
-      />
+  <div class="header-actions">
+    <label class="identity" title="Board actions are attributed to this identity">
+      <span>Acting as</span>
+      <input [value]="identity()" (input)="onIdentityInput($event)" placeholder="human" />
     </label>
-
-    <label class="field">
-      <span>repo</span>
-      <select (change)="onRepoFilter($any($event.target).value)">
-        <option value="">all repos</option>
-        @for (repo of board.repos.value(); track repo) {
-          <option [value]="repo" [selected]="repo === board.repoFilter()">{{ repo }}</option>
-        }
-      </select>
-    </label>
-
-    <label class="field">
-      <span>search</span>
-      <input
-        [value]="board.search()"
-        (input)="board.search.set($any($event.target).value)"
-        placeholder="title, body, tag…"
-      />
-    </label>
-
-    <button class="ghost" (click)="board.reloadAll()" title="Refresh now">↻</button>
-    <button class="primary" (click)="formOpen.set(!formOpen())">
+    <button
+      class="refresh-button"
+      type="button"
+      (click)="board.reloadAll()"
+      title="Refresh board"
+      aria-label="Refresh board"
+    >
+      <span aria-hidden="true">↻</span>
+    </button>
+    <button
+      class="primary"
+      type="button"
+      (click)="formOpen.set(!formOpen())"
+      [attr.aria-expanded]="formOpen()"
+    >
       {{ formOpen() ? 'Close' : '+ New task' }}
+    </button>
+    <button class="secondary" type="button" (click)="archiveOpen.set(!archiveOpen())">
+      {{ archiveOpen() ? 'Board' : 'Archive' }}
     </button>
   </div>
 </header>
 
+<nav class="filter-bar" aria-label="Board filters">
+  <label class="search-field">
+    <span class="search-icon" aria-hidden="true">⌕</span>
+    <span class="sr-only">Search tasks</span>
+    <input [value]="board.search()" (input)="onSearchInput($event)" placeholder="Search tasks" />
+  </label>
+  <span class="filter-divider" aria-hidden="true"></span>
+  <label class="repo-filter">
+    <span>Repository</span>
+    <select [value]="board.repoFilter() ?? ''" (change)="onRepoFilterChange($event)">
+      <option value="">All repositories</option>
+      @for (repo of board.repos.value(); track repo) {
+        <option [value]="repo">{{ repo }}</option>
+      }
+    </select>
+  </label>
+  @if (board.search() || board.repoFilter()) {
+    <button class="clear-filter" type="button" (click)="board.search.set(''); onRepoFilter('')">
+      Clear filters
+    </button>
+  }
+</nav>
+
 @if (formOpen()) {
   <form class="new-task" (submit)="$event.preventDefault(); submit()">
-    <input
-      class="grow"
-      [value]="draftTitle()"
-      (input)="draftTitle.set($any($event.target).value)"
-      placeholder="Task title *"
-      autofocus
-    />
-    <input
-      [value]="draftRepo()"
-      (input)="draftRepo.set($any($event.target).value)"
-      placeholder="repo (default: global)"
-    />
-    <input
-      [value]="draftTags()"
-      (input)="draftTags.set($any($event.target).value)"
-      placeholder="tags, comma separated"
-    />
-    <input
-      class="prio"
-      type="number"
-      [value]="draftPriority()"
-      (input)="draftPriority.set(+$any($event.target).value)"
-      placeholder="prio"
-      title="Higher priority sorts first"
-    />
-    <textarea
-      class="grow"
-      [value]="draftBody()"
-      (input)="draftBody.set($any($event.target).value)"
-      placeholder="Details / acceptance notes (markdown ok)"
-      rows="2"
-    ></textarea>
-    <button class="primary" type="submit">Post</button>
+    <div class="form-title">
+      <strong>New task</strong>
+      <span>Define one clear unit of work.</span>
+    </div>
+    <div class="form-grid">
+      <label class="form-field title-field">
+        <span>Title</span>
+        <input
+          [value]="draftTitle()"
+          (input)="onDraftInput('title', $event)"
+          placeholder="What needs to be done?"
+          required
+          autofocus
+        />
+      </label>
+      <label class="form-field">
+        <span>Repository</span>
+        <input [value]="draftRepo()" (input)="onDraftInput('repo', $event)" placeholder="global" />
+      </label>
+      <label class="form-field">
+        <span>Tags</span>
+        <input
+          [value]="draftTags()"
+          (input)="onDraftInput('tags', $event)"
+          placeholder="api, bug"
+        />
+      </label>
+      <label class="form-field priority-field">
+        <span>Priority</span>
+        <input type="number" [value]="draftPriority()" (input)="onPriorityInput($event)" />
+      </label>
+      <label class="form-field details-field">
+        <span>Details</span>
+        <textarea
+          [value]="draftBody()"
+          (input)="onDraftInput('body', $event)"
+          placeholder="Context or acceptance notes"
+          rows="2"
+        ></textarea>
+      </label>
+      <div class="form-actions">
+        <button class="secondary" type="button" (click)="formOpen.set(false)">Cancel</button>
+        <button
+          class="primary"
+          type="submit"
+          [disabled]="board.mutationPending() || !draftTitle().trim()"
+        >
+          {{ board.mutationPending() ? 'Posting…' : 'Post task' }}
+        </button>
+      </div>
+    </div>
   </form>
 }
 
-<div class="layout">
-  <main class="board">
+@if (board.errorMessage(); as message) {
+  <div class="error-banner" role="alert">
+    <span><strong>Action failed.</strong> {{ message }}</span>
+    <button type="button" (click)="board.errorMessage.set(null)" aria-label="Dismiss error">
+      ×
+    </button>
+  </div>
+}
+
+@if (archiveOpen()) {
+  <main class="archive-view">
+    <header class="archive-header">
+      <div>
+        <h2>Archive</h2>
+        <p>Completed work moves here after 15 minutes.</p>
+      </div>
+      <input
+        [value]="board.archiveSearch()"
+        (input)="onArchiveSearchInput($event)"
+        placeholder="Search title, details, tags, or agent"
+        aria-label="Search archive"
+      />
+    </header>
+    <div class="archive-list">
+      @for (task of board.archive.value(); track task.id) {
+        <article class="archive-row">
+          <div class="archive-context">
+            <span>#{{ task.id }}</span>
+            <strong>{{ task.title }}</strong>
+            <span>{{ task.repo }}</span>
+          </div>
+          @if (task.body) { <p>{{ task.body }}</p> }
+          <div class="archive-meta">
+            <span>Completed {{ ago(task.updated_at) }}</span>
+            @if (task.created_by) { <span>Created by {{ task.created_by }}</span> }
+            <button class="secondary" type="button" (click)="move(task, 'todo')">Reopen</button>
+          </div>
+        </article>
+      } @empty {
+        <div class="archive-empty">No archived work matches this search.</div>
+      }
+    </div>
+  </main>
+} @else {
+<div class="workspace">
+  <main class="board" aria-label="Task board">
     @for (col of columns; track col.status) {
       <section class="column" [attr.data-status]="col.status">
-        <header class="col-head">
-          <span>{{ col.label }}</span>
-          <span class="count">{{ tasksFor(col.status).length }}</span>
+        <header class="column-header">
+          <span class="status-name">
+            <span class="status-marker" aria-hidden="true"></span>
+            {{ col.label }}
+          </span>
+          <span class="task-count">{{ tasksFor(col.status).length }}</span>
         </header>
 
-        <div class="cards">
+        <div class="task-list" [attr.aria-label]="col.label + ' tasks'">
           @for (task of tasksFor(col.status); track task.id) {
-            <article class="card" [attr.data-status]="task.status">
-              <div class="card-top">
-                <span class="repo">{{ task.repo }}</span>
-                <span class="id">#{{ task.id }}</span>
+            <article class="task" [attr.data-status]="task.status">
+              <div class="task-context">
+                <span class="task-id">#{{ task.id }}</span>
+                <span class="repo" [title]="task.repo">{{ task.repo }}</span>
+                @if (task.priority) {
+                  <span class="priority">P{{ task.priority }}</span>
+                }
               </div>
+
               <h3>{{ task.title }}</h3>
               @if (task.body) {
-                <p class="body">{{ task.body }}</p>
+                <p class="task-body">{{ task.body }}</p>
               }
 
               @if (chips(task.tags).length) {
-                <div class="tags">
+                <div class="tags" aria-label="Tags">
                   @for (tag of chips(task.tags); track tag) {
-                    <span class="tag">{{ tag }}</span>
+                    <span>{{ tag }}</span>
                   }
                 </div>
               }
 
-              <div class="meta">
+              <div class="ownership" [class.unowned]="!task.claimed_by">
+                <span class="owner-dot" aria-hidden="true"></span>
                 @if (task.claimed_by) {
-                  <span class="owner" title="claimed {{ ago(task.claimed_at) }}">
-                    ● {{ task.claimed_by }}
-                  </span>
+                  <strong>{{ task.claimed_by }}</strong>
+                  <span>{{ ago(task.claimed_at) }}</span>
                 } @else {
-                  <span class="unclaimed">unclaimed</span>
-                }
-                @if (task.priority) {
-                  <span class="prio-badge">P{{ task.priority }}</span>
+                  <span>Available to claim</span>
                 }
               </div>
 
-              <div class="actions">
-                @if (task.status === 'todo' || task.status === 'abandoned') {
-                  <button (click)="claim(task)">Claim</button>
-                }
-                @if (task.status === 'claimed') {
-                  <button (click)="move(task, 'in_progress')">Start</button>
-                  <button class="ghost" (click)="release(task)">Release</button>
-                }
-                @if (task.status === 'in_progress') {
-                  <button (click)="move(task, 'done')">Done</button>
-                  <button class="ghost" (click)="move(task, 'blocked')">Block</button>
-                }
-                @if (task.status === 'blocked') {
-                  <button (click)="move(task, 'in_progress')">Resume</button>
-                }
-                @if (task.status === 'done') {
-                  <button class="ghost" (click)="move(task, 'todo')">Reopen</button>
-                }
-                <button class="danger" (click)="remove(task)" title="Delete">✕</button>
+              <div class="task-actions">
+                <div class="primary-actions">
+                  @if (task.status === 'todo' || task.status === 'abandoned') {
+                    <button
+                      type="button"
+                      (click)="claim(task)"
+                      [disabled]="board.mutationPending()"
+                    >
+                      Claim
+                    </button>
+                  }
+                  @if (task.status === 'claimed') {
+                    <button
+                      type="button"
+                      (click)="move(task, 'in_progress')"
+                      [disabled]="board.mutationPending()"
+                    >
+                      Start
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      (click)="release(task)"
+                      [disabled]="board.mutationPending()"
+                    >
+                      Release
+                    </button>
+                  }
+                  @if (task.status === 'in_progress') {
+                    <button
+                      type="button"
+                      (click)="move(task, 'done')"
+                      [disabled]="board.mutationPending()"
+                    >
+                      Complete
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      (click)="move(task, 'blocked')"
+                      [disabled]="board.mutationPending()"
+                    >
+                      Block
+                    </button>
+                  }
+                  @if (task.status === 'blocked') {
+                    <button
+                      type="button"
+                      (click)="move(task, 'in_progress')"
+                      [disabled]="board.mutationPending()"
+                    >
+                      Resume
+                    </button>
+                  }
+                  @if (task.status === 'done') {
+                    <button
+                      type="button"
+                      class="secondary"
+                      (click)="move(task, 'todo')"
+                      [disabled]="board.mutationPending()"
+                    >
+                      Reopen
+                    </button>
+                  }
+                </div>
+                <button
+                  type="button"
+                  class="delete-button"
+                  (click)="remove(task)"
+                  title="Delete task"
+                  aria-label="Delete task"
+                >
+                  ×
+                </button>
               </div>
             </article>
           } @empty {
-            <p class="empty">—</p>
+            <div class="column-empty">
+              <span aria-hidden="true">·</span>
+              <p>No tasks</p>
+            </div>
           }
         </div>
       </section>
     }
   </main>
 
-  <aside class="side">
-    <section class="panel">
-      <h2>Agents</h2>
-      @for (agent of board.agents.value(); track agent.id) {
-        <div class="agent">
-          <span class="status" [class.on]="isOnline(agent)"></span>
-          <span class="name">{{ agent.id }}</span>
-          <span class="kind">{{ agent.kind }}</span>
-          <span class="seen">{{ ago(agent.last_seen) }}</span>
-        </div>
-      } @empty {
-        <p class="empty">No agents have checked in yet.</p>
-      }
+  <aside class="sidebar">
+    <section class="side-section agents-section">
+      <header class="side-header">
+        <h2>Agents</h2>
+        <span>{{ board.agents.value().length }}</span>
+      </header>
+      <div class="side-content">
+        @for (agent of board.agents.value(); track agent.id) {
+          <div class="agent-row">
+            <span
+              class="presence"
+              [class.online]="isOnline(agent)"
+              [attr.title]="isOnline(agent) ? 'Online' : 'Offline'"
+            ></span>
+            <div class="agent-name">
+              <strong>{{ agent.id }}</strong>
+              <span>{{ agent.kind }}</span>
+            </div>
+            <time>{{ ago(agent.last_seen) }}</time>
+          </div>
+        } @empty {
+          <div class="side-empty">No agents checked in.</div>
+        }
+      </div>
     </section>
 
-    <section class="panel">
-      <h2>Activity</h2>
-      @for (a of board.activity.value(); track a.id) {
-        <div class="event">
-          <span class="event-time">{{ ago(a.created_at) }}</span>
-          <span class="event-text">{{ activityLabel(a) }}</span>
-        </div>
-      } @empty {
-        <p class="empty">Nothing yet.</p>
-      }
+    <section class="side-section recent-section">
+      <header class="side-header">
+        <h2>Recently completed</h2>
+        <span>15 min</span>
+      </header>
+      <div class="side-content recent-list">
+        @for (task of board.recentlyCompleted.value(); track task.id) {
+          <div class="recent-row">
+            <div><strong>{{ task.title }}</strong><span>{{ task.repo }} · {{ ago(task.updated_at) }}</span></div>
+            <button class="secondary" type="button" (click)="move(task, 'todo')">Reopen</button>
+          </div>
+        } @empty {
+          <div class="side-empty">Nothing completed recently.</div>
+        }
+      </div>
     </section>
   </aside>
 </div>
+}

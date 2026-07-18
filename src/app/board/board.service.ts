@@ -14,10 +14,10 @@ import {
   signal,
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import type { Activity, Agent, Task, TaskStatus } from './models';
+import type { Agent, Task, TaskStatus } from './models';
 
 /** How often (ms) the browser re-polls the board for other agents' changes. */
 const POLL_INTERVAL_MS = 4000;
@@ -31,6 +31,9 @@ export class BoardService {
   readonly repoFilter = signal<string | null>(null);
   /** Free-text search across title/body/tags. */
   readonly search = signal('');
+  readonly archiveSearch = signal('');
+  readonly errorMessage = signal<string | null>(null);
+  readonly mutationPending = signal(false);
 
   /** Query string derived from the current filters. */
   private readonly taskQuery = computed(() => {
@@ -57,14 +60,22 @@ export class BoardService {
     defaultValue: [],
   });
 
-  /** The activity feed, optionally scoped to the selected repo. */
-  readonly activity = httpResource<Activity[]>(
+  readonly recentlyCompleted = httpResource<Task[]>(
     () => {
       const repo = this.repoFilter();
-      return `/api/activity?limit=60${repo ? `&repo=${encodeURIComponent(repo)}` : ''}`;
+      return `/api/tasks/recently-completed?limit=8${repo ? `&repo=${encodeURIComponent(repo)}` : ''}`;
     },
     { defaultValue: [] },
   );
+
+  readonly archive = httpResource<Task[]>(() => {
+    const params = new URLSearchParams({ limit: '200' });
+    const repo = this.repoFilter();
+    const q = this.archiveSearch().trim();
+    if (repo) params.set('repo', repo);
+    if (q) params.set('q', q);
+    return `/api/archive?${params.toString()}`;
+  }, { defaultValue: [] });
 
   /** Distinct repo names, for the filter dropdown. */
   readonly repos = httpResource<string[]>(() => `/api/repos`, {
@@ -81,7 +92,8 @@ export class BoardService {
   reloadAll(): void {
     this.tasks.reload();
     this.agents.reload();
-    this.activity.reload();
+    this.recentlyCompleted.reload();
+    this.archive.reload();
     this.repos.reload();
   }
 
@@ -94,39 +106,74 @@ export class BoardService {
     priority: number;
     agent: string;
   }): Promise<void> {
-    await firstValueFrom(this.http.post('/api/tasks', input));
-    this.reloadAll();
+    await this.runMutation(firstValueFrom(this.http.post('/api/tasks', input)));
   }
 
   /** Attempt to claim a task for `agent`. Resolves to `false` on conflict. */
   async claim(id: number, agent: string): Promise<boolean> {
+    this.errorMessage.set(null);
+    this.mutationPending.set(true);
     try {
       await firstValueFrom(this.http.post(`/api/tasks/${id}/claim`, { agent }));
       this.reloadAll();
       return true;
-    } catch {
+    } catch (error: unknown) {
       this.reloadAll();
-      return false;
+      if (error instanceof HttpErrorResponse && error.status === 409) {
+        this.errorMessage.set('That task was claimed by another agent.');
+        return false;
+      }
+      this.errorMessage.set(this.messageFor(error));
+      throw error;
+    } finally {
+      this.mutationPending.set(false);
     }
   }
 
   /** Release a claim back to the todo column. */
   async release(id: number, agent: string): Promise<void> {
-    await firstValueFrom(this.http.post(`/api/tasks/${id}/release`, { agent }));
-    this.reloadAll();
+    await this.runMutation(
+      firstValueFrom(this.http.post(`/api/tasks/${id}/release`, { agent })),
+    );
   }
 
   /** Move a task to a new status. */
   async setStatus(id: number, status: TaskStatus, agent: string): Promise<void> {
-    await firstValueFrom(
+    await this.runMutation(firstValueFrom(
       this.http.post(`/api/tasks/${id}/status`, { status, agent }),
-    );
-    this.reloadAll();
+    ));
   }
 
   /** Delete a task. */
   async remove(id: number): Promise<void> {
-    await firstValueFrom(this.http.delete(`/api/tasks/${id}`));
-    this.reloadAll();
+    await this.runMutation(firstValueFrom(this.http.delete(`/api/tasks/${id}`)));
+  }
+
+  private async runMutation(request: Promise<unknown>): Promise<void> {
+    this.errorMessage.set(null);
+    this.mutationPending.set(true);
+    try {
+      await request;
+      this.reloadAll();
+    } catch (error: unknown) {
+      this.errorMessage.set(this.messageFor(error));
+      this.reloadAll();
+      throw error;
+    } finally {
+      this.mutationPending.set(false);
+    }
+  }
+
+  private messageFor(error: unknown): string {
+    if (error instanceof HttpErrorResponse) {
+      const body = error.error as { error?: unknown } | null;
+      if (typeof body?.error === 'string') {
+        return body.error;
+      }
+      if (error.status === 0) {
+        return 'The board server is unavailable.';
+      }
+    }
+    return 'The action could not be completed.';
   }
 }

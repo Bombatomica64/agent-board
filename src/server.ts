@@ -7,6 +7,7 @@ import {
 import express from 'express';
 import { join } from 'node:path';
 import { createApiRouter } from './server/api';
+import { createMcpRouter } from './server/mcp';
 
 const browserDistFolder = join(import.meta.dirname, '../browser');
 
@@ -18,6 +19,7 @@ const angularApp = new AngularNodeAppEngine();
  * requests are served by Express and never fall through to SSR rendering.
  */
 app.use('/api', createApiRouter());
+app.use('/mcp', createMcpRouter());
 
 /**
  * Serve static files from /browser

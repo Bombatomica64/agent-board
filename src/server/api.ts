@@ -18,6 +18,8 @@ import {
   heartbeat,
   listActivity,
   listAgents,
+  listArchivedTasks,
+  listRecentlyCompleted,
   listRepos,
   listTasks,
   recordNote,
@@ -94,6 +96,25 @@ export function createApiRouter(): Router {
   /** Distinct repo names on the board (for filter UIs). */
   api.get('/repos', (_req, res) => {
     res.json(listRepos());
+  });
+
+  api.get('/tasks/recently-completed', (req, res) => {
+    res.json(
+      listRecentlyCompleted({
+        repo: req.query['repo'] ? String(req.query['repo']) : undefined,
+        limit: req.query['limit'] ? Number(req.query['limit']) : undefined,
+      }),
+    );
+  });
+
+  api.get('/archive', (req, res) => {
+    res.json(
+      listArchivedTasks({
+        repo: req.query['repo'] ? String(req.query['repo']) : undefined,
+        q: req.query['q'] ? String(req.query['q']) : undefined,
+        limit: req.query['limit'] ? Number(req.query['limit']) : undefined,
+      }),
+    );
   });
 
   /** Create a new task. `title` is required; everything else has defaults. */
@@ -201,12 +222,24 @@ export function createApiRouter(): Router {
       return;
     }
     const agent = String(req.body?.agent ?? '').trim();
-    const task = releaseTask(id, agent);
-    if (!task) {
+    if (!agent) {
+      res.status(400).json({ error: 'agent is required' });
+      return;
+    }
+    const result = releaseTask(id, agent);
+    if (!result.ok && result.reason === 'not_found') {
       res.status(404).json({ error: 'not found' });
       return;
     }
-    res.json(task);
+    if (!result.ok) {
+      res.status(409).json({
+        error: 'task is not claimed by this agent',
+        claimed_by: result.task.claimed_by,
+        task: result.task,
+      });
+      return;
+    }
+    res.json(result.task);
   });
 
   /** Transition a task to a new status (in_progress, blocked, done, ...). */
@@ -221,17 +254,37 @@ export function createApiRouter(): Router {
       res.status(400).json({ error: `invalid status: ${status}` });
       return;
     }
-    const task = setStatus(
+    const agent = String(req.body?.agent ?? '').trim();
+    if (!agent) {
+      res.status(400).json({ error: 'agent is required' });
+      return;
+    }
+    const result = setStatus(
       id,
       status,
-      req.body?.agent ? String(req.body.agent) : undefined,
+      agent,
       req.body?.message ? String(req.body.message) : undefined,
     );
-    if (!task) {
+    if (!result.ok && result.reason === 'not_found') {
       res.status(404).json({ error: 'not found' });
       return;
     }
-    res.json(task);
+    if (!result.ok && result.reason === 'conflict') {
+      res.status(409).json({
+        error: 'task is owned by another agent',
+        claimed_by: result.task.claimed_by,
+        task: result.task,
+      });
+      return;
+    }
+    if (!result.ok) {
+      res.status(422).json({
+        error: `cannot move task from ${result.task.status} to ${status}`,
+        task: result.task,
+      });
+      return;
+    }
+    res.json(result.task);
   });
 
   /** Post a comment against a task (recorded in the activity feed). */
@@ -247,7 +300,10 @@ export function createApiRouter(): Router {
       res.status(400).json({ error: 'agent and message are required' });
       return;
     }
-    commentTask(id, agent, message);
+    if (!commentTask(id, agent, message)) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
     res.status(201).json({ ok: true });
   });
 
