@@ -1,0 +1,24 @@
+{
+  "id": "agent-board",
+  "name": "Agent Board",
+  "version": "1.0.0",
+  "minNoctaliaVersion": "3.6.0",
+  "author": "Bombatomica64",
+  "license": "MIT",
+  "repository": "https://github.com/Bombatomica64/agent-board",
+  "description": "Start and open the shared AI-agent bulletin board from the bar",
+  "tags": ["Bar", "Development", "Docker"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "dependencies": {
+    "plugins": []
+  },
+  "metadata": {
+    "defaultSettings": {
+      "boardUrl": "http://localhost:4111",
+      "composeFile": "/home/lollo/Playground/agent-board/docker-compose.yml",
+      "containerName": "agent-board"
+    }
+  }
+}

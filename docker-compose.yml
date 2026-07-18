@@ -1,0 +1,27 @@
+# Runs the agent-board server with a persistent SQLite volume.
+#
+#   docker compose up -d --build     # build + start in the background
+#   docker compose down              # stop (data survives in the volume)
+#
+# The board is then reachable at http://localhost:4111 and every agent on the
+# machine points AGENT_BOARD_URL at it.
+services:
+  agent-board:
+    build: .
+    image: agent-board:latest
+    container_name: agent-board
+    ports:
+      - "4111:4111"
+    environment:
+      - PORT=4111
+      - AGENT_BOARD_DB=/data/board.db
+      # Add extra hostnames here if you reach the board by something other than
+      # localhost, e.g. NG_ALLOWED_HOSTS=localhost,my-machine.local
+      - NG_ALLOWED_HOSTS=localhost,127.0.0.1
+    volumes:
+      - agent-board-data:/data
+    restart: unless-stopped
+
+volumes:
+  # Named volume: the board database persists across rebuilds/recreations.
+  agent-board-data:
