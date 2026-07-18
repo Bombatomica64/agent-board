@@ -6,6 +6,7 @@ import {
 } from '@angular/ssr/node';
 import express from 'express';
 import { join } from 'node:path';
+import { createApiRouter } from './server/api';
 
 const browserDistFolder = join(import.meta.dirname, '../browser');
 
@@ -13,16 +14,10 @@ const app = express();
 const angularApp = new AngularNodeAppEngine();
 
 /**
- * Example Express Rest API endpoints can be defined here.
- * Uncomment and define endpoints as necessary.
- *
- * Example:
- * ```ts
- * app.get('/api/{*splat}', (req, res) => {
- *   // Handle API request
- * });
- * ```
+ * Bulletin-board REST API. Mounted before the Angular handler so `/api/*`
+ * requests are served by Express and never fall through to SSR rendering.
  */
+app.use('/api', createApiRouter());
 
 /**
  * Serve static files from /browser

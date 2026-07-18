@@ -1,0 +1,180 @@
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>agent&nbsp;board</h1>
+    <span class="tagline">shared work coordination for AI agents</span>
+  </div>
+
+  <div class="controls">
+    <label class="field identity" title="Actions you take are attributed to this name">
+      <span>acting as</span>
+      <input
+        [value]="identity()"
+        (input)="identity.set($any($event.target).value)"
+        placeholder="human"
+      />
+    </label>
+
+    <label class="field">
+      <span>repo</span>
+      <select (change)="onRepoFilter($any($event.target).value)">
+        <option value="">all repos</option>
+        @for (repo of board.repos.value(); track repo) {
+          <option [value]="repo" [selected]="repo === board.repoFilter()">{{ repo }}</option>
+        }
+      </select>
+    </label>
+
+    <label class="field">
+      <span>search</span>
+      <input
+        [value]="board.search()"
+        (input)="board.search.set($any($event.target).value)"
+        placeholder="title, body, tag…"
+      />
+    </label>
+
+    <button class="ghost" (click)="board.reloadAll()" title="Refresh now">↻</button>
+    <button class="primary" (click)="formOpen.set(!formOpen())">
+      {{ formOpen() ? 'Close' : '+ New task' }}
+    </button>
+  </div>
+</header>
+
+@if (formOpen()) {
+  <form class="new-task" (submit)="$event.preventDefault(); submit()">
+    <input
+      class="grow"
+      [value]="draftTitle()"
+      (input)="draftTitle.set($any($event.target).value)"
+      placeholder="Task title *"
+      autofocus
+    />
+    <input
+      [value]="draftRepo()"
+      (input)="draftRepo.set($any($event.target).value)"
+      placeholder="repo (default: global)"
+    />
+    <input
+      [value]="draftTags()"
+      (input)="draftTags.set($any($event.target).value)"
+      placeholder="tags, comma separated"
+    />
+    <input
+      class="prio"
+      type="number"
+      [value]="draftPriority()"
+      (input)="draftPriority.set(+$any($event.target).value)"
+      placeholder="prio"
+      title="Higher priority sorts first"
+    />
+    <textarea
+      class="grow"
+      [value]="draftBody()"
+      (input)="draftBody.set($any($event.target).value)"
+      placeholder="Details / acceptance notes (markdown ok)"
+      rows="2"
+    ></textarea>
+    <button class="primary" type="submit">Post</button>
+  </form>
+}
+
+<div class="layout">
+  <main class="board">
+    @for (col of columns; track col.status) {
+      <section class="column" [attr.data-status]="col.status">
+        <header class="col-head">
+          <span>{{ col.label }}</span>
+          <span class="count">{{ tasksFor(col.status).length }}</span>
+        </header>
+
+        <div class="cards">
+          @for (task of tasksFor(col.status); track task.id) {
+            <article class="card" [attr.data-status]="task.status">
+              <div class="card-top">
+                <span class="repo">{{ task.repo }}</span>
+                <span class="id">#{{ task.id }}</span>
+              </div>
+              <h3>{{ task.title }}</h3>
+              @if (task.body) {
+                <p class="body">{{ task.body }}</p>
+              }
+
+              @if (chips(task.tags).length) {
+                <div class="tags">
+                  @for (tag of chips(task.tags); track tag) {
+                    <span class="tag">{{ tag }}</span>
+                  }
+                </div>
+              }
+
+              <div class="meta">
+                @if (task.claimed_by) {
+                  <span class="owner" title="claimed {{ ago(task.claimed_at) }}">
+                    ● {{ task.claimed_by }}
+                  </span>
+                } @else {
+                  <span class="unclaimed">unclaimed</span>
+                }
+                @if (task.priority) {
+                  <span class="prio-badge">P{{ task.priority }}</span>
+                }
+              </div>
+
+              <div class="actions">
+                @if (task.status === 'todo' || task.status === 'abandoned') {
+                  <button (click)="claim(task)">Claim</button>
+                }
+                @if (task.status === 'claimed') {
+                  <button (click)="move(task, 'in_progress')">Start</button>
+                  <button class="ghost" (click)="release(task)">Release</button>
+                }
+                @if (task.status === 'in_progress') {
+                  <button (click)="move(task, 'done')">Done</button>
+                  <button class="ghost" (click)="move(task, 'blocked')">Block</button>
+                }
+                @if (task.status === 'blocked') {
+                  <button (click)="move(task, 'in_progress')">Resume</button>
+                }
+                @if (task.status === 'done') {
+                  <button class="ghost" (click)="move(task, 'todo')">Reopen</button>
+                }
+                <button class="danger" (click)="remove(task)" title="Delete">✕</button>
+              </div>
+            </article>
+          } @empty {
+            <p class="empty">—</p>
+          }
+        </div>
+      </section>
+    }
+  </main>
+
+  <aside class="side">
+    <section class="panel">
+      <h2>Agents</h2>
+      @for (agent of board.agents.value(); track agent.id) {
+        <div class="agent">
+          <span class="status" [class.on]="isOnline(agent)"></span>
+          <span class="name">{{ agent.id }}</span>
+          <span class="kind">{{ agent.kind }}</span>
+          <span class="seen">{{ ago(agent.last_seen) }}</span>
+        </div>
+      } @empty {
+        <p class="empty">No agents have checked in yet.</p>
+      }
+    </section>
+
+    <section class="panel">
+      <h2>Activity</h2>
+      @for (a of board.activity.value(); track a.id) {
+        <div class="event">
+          <span class="event-time">{{ ago(a.created_at) }}</span>
+          <span class="event-text">{{ activityLabel(a) }}</span>
+        </div>
+      } @empty {
+        <p class="empty">Nothing yet.</p>
+      }
+    </section>
+  </aside>
+</div>

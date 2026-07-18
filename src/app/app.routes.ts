@@ -1,3 +1,5 @@
 import { Routes } from '@angular/router';
+import { Board } from './board/board';
 
-export const routes: Routes = [];
+/** Single-page board is the whole app for now. */
+export const routes: Routes = [{ path: '', component: Board }];
