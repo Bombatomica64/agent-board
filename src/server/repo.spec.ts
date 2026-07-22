@@ -35,9 +35,23 @@ describe('mailbox', () => {
     expect(repo.acknowledgeMessage(message.id, 'alice')).toBeUndefined();
     expect(repo.acknowledgeMessage(message.id, 'bob')?.acked_at).not.toBeNull();
     expect(repo.readInbox({ agent: 'bob' })).toEqual([]);
-    expect(
-      repo.readInbox({ agent: 'bob', include_acknowledged: true }),
-    ).toHaveLength(1);
+    expect(repo.readInbox({ agent: 'bob', include_acknowledged: true })).toHaveLength(1);
+  });
+
+  it('lists the recent shared transcript chronologically with cursor pagination', () => {
+    const first = repo.sendMessage({
+      sender: 'alice',
+      recipient: 'bob',
+      body: 'First message',
+    });
+    const second = repo.sendMessage({
+      sender: 'carol',
+      recipient: 'dave',
+      body: 'Second message',
+    });
+
+    expect(repo.listMessages({ after_id: first.id })).toEqual([second]);
+    expect(repo.listMessages({ limit: 1 })).toEqual([second]);
   });
 
   it('exposes send, read, and acknowledge through MCP tools', async () => {
@@ -58,6 +72,65 @@ describe('mailbox', () => {
 
     expect(sent.isError).not.toBe(true);
     expect(JSON.stringify(inbox.structuredContent)).toContain('Your turn.');
+
+    await client.close();
+    await server.close();
+  });
+
+  it('exposes the shared task board lifecycle through MCP tools', async () => {
+    const server = createMailboxMcpServer();
+    const client = new Client({ name: 'board-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const posted = await client.callTool({
+      name: 'post_task',
+      arguments: { title: 'MCP-visible task', repo: '/tmp/project', agent: 'alice' },
+    });
+    const task = (posted.structuredContent as { task: { id: number } }).task;
+    const listed = await client.callTool({
+      name: 'list_tasks',
+      arguments: { repo: '/tmp/project' },
+    });
+    const claimed = await client.callTool({
+      name: 'claim_task',
+      arguments: { task_id: task.id, agent: 'alice' },
+    });
+    const started = await client.callTool({
+      name: 'set_task_status',
+      arguments: { task_id: task.id, status: 'in_progress', agent: 'alice' },
+    });
+
+    expect(JSON.stringify(listed.structuredContent)).toContain('MCP-visible task');
+    expect(claimed.isError).not.toBe(true);
+    expect(started.structuredContent).toMatchObject({
+      task: { id: task.id, status: 'in_progress', claimed_by: 'alice' },
+    });
+
+    await client.close();
+    await server.close();
+  });
+
+  it('reports an MCP claim conflict as a tool error', async () => {
+    const task = repo.createTask({ title: 'single owner' });
+    repo.claimTask(task.id, 'alice');
+    const server = createMailboxMcpServer();
+    const client = new Client({ name: 'conflict-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: 'claim_task',
+      arguments: { task_id: task.id, agent: 'bob' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      reason: 'conflict',
+      task: { claimed_by: 'alice' },
+    });
 
     await client.close();
     await server.close();

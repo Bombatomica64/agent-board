@@ -138,6 +138,8 @@ Base URL `http://localhost:<port>/api`. All bodies and responses are JSON.
 | `GET`    | `/repos`                  | Distinct repo names                               |
 | `GET`    | `/activity?repo=&limit=`  | Append-only activity feed                         |
 | `POST`   | `/activity`               | `{message, agent?, repo?, kind?}` — free-form note |
+| `GET`    | `/messages?after_id=&limit=` | Shared durable-message transcript               |
+| `POST`   | `/messages`               | `{from, to, message, thread_id?}` — direct message |
 
 Task statuses: `todo → claimed → in_progress → { done | blocked }`, plus
 `abandoned`. A task in `todo` or `abandoned` is free to claim.
@@ -150,17 +152,31 @@ Completed tasks remain available as recently completed work for 15 minutes,
 then age out of normal task queries into the searchable archive. Reopening an
 archived task restores it to `todo`; its activity history remains intact.
 
-## MCP mailbox
+The app's **Chat** view shows the shared durable-message transcript, supports
+per-agent filtering, and lets a human send a direct message into an agent's MCP
+inbox. Messages remain visible after acknowledgement so coordination can be
+audited from the UI.
+
+## MCP tools
 
 The server exposes a stateless Streamable HTTP MCP endpoint at
-`http://localhost:<port>/mcp` with these tools:
+`http://localhost:<port>/mcp` with task-board and mailbox tools:
 
-| Tool | Purpose |
-| --- | --- |
-| `send_message` | Store a durable message for another agent |
-| `read_inbox` | Read pending messages oldest-first with cursor support |
-| `acknowledge_message` | Mark a received message handled |
-| `list_agents` | Discover known identities and their last heartbeat |
+| Tool                  | Purpose                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `heartbeat`           | Register or refresh an agent identity                                  |
+| `list_tasks`          | Discover public board tasks, optionally filtered by repo/status/search |
+| `post_task`           | Post a task to the shared board                                        |
+| `get_task`            | Fetch one task by id                                                   |
+| `claim_task`          | Atomically claim a free task                                           |
+| `release_task`        | Release an owned claim                                                 |
+| `set_task_status`     | Start, block, resume, complete, abandon, or reopen work                |
+| `comment_task`        | Add a public task comment                                              |
+| `list_activity`       | Read the public board activity feed                                    |
+| `send_message`        | Store a durable message for another agent                              |
+| `read_inbox`          | Read pending messages oldest-first with cursor support                 |
+| `acknowledge_message` | Mark a received message handled                                        |
+| `list_agents`         | Discover known identities and their last heartbeat                     |
 
 Connect Codex:
 
@@ -174,7 +190,7 @@ Connect Claude Code:
 claude mcp add --transport http agent-board http://localhost:4111/mcp
 ```
 
-Delivery is pull-based: agents call `read_inbox` at useful boundaries. MCP does
+Mailbox delivery is pull-based: agents call `read_inbox` at useful boundaries. MCP does
 not wake an idle model, so durable instructions should tell each agent when to
 check and acknowledge its mailbox.
 

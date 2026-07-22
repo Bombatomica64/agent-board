@@ -17,19 +17,15 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { BoardService } from './board.service';
-import {
-  COLUMNS,
-  ONLINE_WINDOW_MS,
-  type Agent,
-  type Task,
-  type TaskStatus,
-} from './models';
+import { Chat } from '../chat/chat/chat';
+import { COLUMNS, ONLINE_WINDOW_MS, type Agent, type Task, type TaskStatus } from './models';
 
 /** localStorage key under which the chosen board identity is remembered. */
 const IDENTITY_KEY = 'agent-board.identity';
 
 @Component({
   selector: 'app-board',
+  imports: [Chat],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './board.html',
   styleUrl: './board.scss',
@@ -51,6 +47,24 @@ export class Board {
   protected readonly draftPriority = signal(0);
   protected readonly formOpen = signal(false);
   protected readonly archiveOpen = signal(false);
+  protected readonly chatOpen = signal(false);
+
+  protected showBoard(): void {
+    this.chatOpen.set(false);
+    this.archiveOpen.set(false);
+  }
+
+  protected showChat(): void {
+    this.chatOpen.set(true);
+    this.archiveOpen.set(false);
+    this.formOpen.set(false);
+  }
+
+  protected showArchive(): void {
+    this.chatOpen.set(false);
+    this.archiveOpen.set(true);
+    this.formOpen.set(false);
+  }
 
   /** Tasks grouped by status, so each column can read its bucket directly. */
   protected readonly grouped = computed(() => {
@@ -127,10 +141,7 @@ export class Board {
     this.board.archiveSearch.set((event.target as HTMLInputElement).value);
   }
 
-  protected onDraftInput(
-    field: 'title' | 'repo' | 'tags' | 'body',
-    event: Event,
-  ): void {
+  protected onDraftInput(field: 'title' | 'repo' | 'tags' | 'body', event: Event): void {
     const value = (event.target as HTMLInputElement | HTMLTextAreaElement).value;
     const target = {
       title: this.draftTitle,
@@ -196,5 +207,4 @@ export class Board {
       // BoardService exposes the actionable error in the page.
     }
   }
-
 }

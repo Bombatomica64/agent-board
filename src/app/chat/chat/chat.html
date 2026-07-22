@@ -1,0 +1,110 @@
+<main class="chat-shell" aria-label="Agent chat">
+  <aside class="channel-rail" aria-label="Chat channels">
+    <header><strong>Agent chat</strong><span>Shared transcript</span></header>
+    <nav aria-label="Conversations">
+      <button
+        type="button"
+        (click)="channel.set('all')"
+        [class.active]="channel() === 'all'"
+        [attr.aria-current]="channel() === 'all' ? 'page' : null"
+      >
+        <span class="channel-symbol" aria-hidden="true">#</span>All messages
+      </button>
+      <p>Direct messages</p>
+      <cdk-virtual-scroll-viewport
+        class="agent-viewport"
+        itemSize="34"
+        minBufferPx="170"
+        maxBufferPx="340"
+        aria-label="Agent direct messages"
+      >
+        <button
+          *cdkVirtualFor="let agent of board.agents.value(); trackBy: trackAgent"
+          type="button"
+          (click)="selectChannel(agent.id)"
+          [class.active]="channel() === agent.id"
+          [attr.aria-current]="channel() === agent.id ? 'page' : null"
+        >
+          <span class="presence" aria-hidden="true"></span>{{ agent.id }}
+        </button>
+      </cdk-virtual-scroll-viewport>
+    </nav>
+  </aside>
+
+  <section class="conversation" aria-labelledby="conversation-title">
+    <header class="conversation-header">
+      <div>
+        <h2 id="conversation-title">
+          {{ channel() === 'all' ? '# all-messages' : '@' + channel() }}
+        </h2>
+        <p>
+          {{
+            channel() === 'all'
+              ? 'Every durable message sent through Agent Board.'
+              : 'Messages involving this agent.'
+          }}
+        </p>
+      </div>
+      <span>{{ visibleMessages().length }} messages</span>
+    </header>
+
+    <ol class="message-list" aria-live="polite" aria-relevant="additions">
+      @for (message of visibleMessages(); track message.id) {
+        <li class="message">
+          <span class="avatar" aria-hidden="true">{{ initials(message.sender) }}</span>
+          <div class="message-content">
+            <header>
+              <strong>{{ message.sender }}</strong
+              ><span>to {{ message.recipient }}</span>
+              <time [attr.datetime]="message.created_at">{{ time(message) }}</time>
+            </header>
+            <p>{{ message.body }}</p>
+          </div>
+        </li>
+      } @empty {
+        <li class="empty-chat">
+          <strong>No messages here yet.</strong
+          ><span>Send a note below; the recipient will receive it in their Agent Board inbox.</span>
+        </li>
+      }
+    </ol>
+
+    <form class="composer" (submit)="$event.preventDefault(); send()">
+      <label class="recipient-field">
+        <span>To</span>
+        <select
+          [value]="effectiveRecipient()"
+          (change)="onRecipientChange($event)"
+          [disabled]="board.agents.value().length === 0"
+        >
+          @for (agent of board.agents.value(); track agent.id) {
+            <option [value]="agent.id">{{ agent.id }}</option>
+          }
+        </select>
+      </label>
+      <label class="message-field">
+        <span class="sr-only">Message</span>
+        <textarea
+          rows="2"
+          [value]="draft()"
+          (input)="onDraftInput($event)"
+          (keydown)="onComposerKeydown($event)"
+          [placeholder]="
+            effectiveRecipient() ? 'Message @' + effectiveRecipient() : 'No agents available'
+          "
+          [disabled]="!effectiveRecipient()"
+        ></textarea>
+      </label>
+      <div class="composer-actions">
+        <span>Enter to send · Shift+Enter for newline</span>
+        <button
+          class="primary"
+          type="submit"
+          [disabled]="!draft().trim() || !effectiveRecipient() || board.mutationPending()"
+        >
+          {{ board.mutationPending() ? 'Sending…' : 'Send' }}
+        </button>
+      </div>
+    </form>
+  </section>
+</main>

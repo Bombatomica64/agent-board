@@ -213,6 +213,26 @@ button {
   font-size: 16px;
 }
 
+.view-switch {
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+
+  button {
+    min-height: 27px;
+    border: 0;
+    background: transparent;
+    color: var(--text-tertiary);
+
+    &.active {
+      background: var(--surface-3);
+      color: var(--text);
+    }
+  }
+}
+
 .filter-bar {
   display: flex;
   min-height: 45px;

@@ -1,0 +1,192 @@
+{
+  "/home/lollo/Playground/agent-board/tsconfig.app.json": {
+    "mtime": 1784397572.457431,
+    "ast_hash": "9eeca7dd19d9f7b883485de9afcaba94",
+    "semantic_hash": "9eeca7dd19d9f7b883485de9afcaba94"
+  },
+  "/home/lollo/Playground/agent-board/tsconfig.spec.json": {
+    "mtime": 1784407178.8343894,
+    "ast_hash": "698c717e28519f2fcf6a49a00d77483f",
+    "semantic_hash": "698c717e28519f2fcf6a49a00d77483f"
+  },
+  "/home/lollo/Playground/agent-board/angular.json": {
+    "mtime": 1784408928.4545648,
+    "ast_hash": "d9782c610685286f1f303f0335c88509",
+    "semantic_hash": "d9782c610685286f1f303f0335c88509"
+  },
+  "/home/lollo/Playground/agent-board/tsconfig.json": {
+    "mtime": 1784397572.4573812,
+    "ast_hash": "dbbf980a953c8196e0a769cdd8006196",
+    "semantic_hash": "dbbf980a953c8196e0a769cdd8006196"
+  },
+  "/home/lollo/Playground/agent-board/package.json": {
+    "mtime": 1784407853.1964278,
+    "ast_hash": "269c76c518f141b83fc188155fdb7337",
+    "semantic_hash": "269c76c518f141b83fc188155fdb7337"
+  },
+  "/home/lollo/Playground/agent-board/noctalia/agent-board/manifest.json": {
+    "mtime": 1784399086.022621,
+    "ast_hash": "e25202abc49cfe1915221506620c784d",
+    "semantic_hash": "e25202abc49cfe1915221506620c784d"
+  },
+  "/home/lollo/Playground/agent-board/bin/agentboard.mjs": {
+    "mtime": 1784398425.3245158,
+    "ast_hash": "b07a3630ede6d4d4c7eba8587bbe5ea4",
+    "semantic_hash": "b07a3630ede6d4d4c7eba8587bbe5ea4"
+  },
+  "/home/lollo/Playground/agent-board/src/main.server.ts": {
+    "mtime": 1784397572.4578176,
+    "ast_hash": "2ac1a26fcfbb08168bdad50fbb7e79bc",
+    "semantic_hash": "2ac1a26fcfbb08168bdad50fbb7e79bc"
+  },
+  "/home/lollo/Playground/agent-board/src/main.ts": {
+    "mtime": 1784397572.4576766,
+    "ast_hash": "ac0b277dca1867b341af9e2d25224ae9",
+    "semantic_hash": "ac0b277dca1867b341af9e2d25224ae9"
+  },
+  "/home/lollo/Playground/agent-board/src/server.ts": {
+    "mtime": 1784407925.7557697,
+    "ast_hash": "63232066d99dbcb239b91e235a50ece2",
+    "semantic_hash": "63232066d99dbcb239b91e235a50ece2"
+  },
+  "/home/lollo/Playground/agent-board/src/app/app.config.ts": {
+    "mtime": 1784397784.1366997,
+    "ast_hash": "ba93ed3c4f21dfb94167515d552b34a5",
+    "semantic_hash": "ba93ed3c4f21dfb94167515d552b34a5"
+  },
+  "/home/lollo/Playground/agent-board/src/app/app.ts": {
+    "mtime": 1784397572.4579463,
+    "ast_hash": "fab006427d379236dc425dc5c5125ec8",
+    "semantic_hash": "fab006427d379236dc425dc5c5125ec8"
+  },
+  "/home/lollo/Playground/agent-board/src/app/app.config.server.ts": {
+    "mtime": 1784397572.458133,
+    "ast_hash": "4a74da4e40e3b8d991114b5f807b96c3",
+    "semantic_hash": "4a74da4e40e3b8d991114b5f807b96c3"
+  },
+  "/home/lollo/Playground/agent-board/src/app/app.routes.ts": {
+    "mtime": 1784397921.7308137,
+    "ast_hash": "e34c803cb58a9097ce06f2217b08d7d4",
+    "semantic_hash": "e34c803cb58a9097ce06f2217b08d7d4"
+  },
+  "/home/lollo/Playground/agent-board/src/app/app.spec.ts": {
+    "mtime": 1784407165.590502,
+    "ast_hash": "ef8aa4f4d59d9e90e5ab3e2bc343278e",
+    "semantic_hash": "ef8aa4f4d59d9e90e5ab3e2bc343278e"
+  },
+  "/home/lollo/Playground/agent-board/src/app/app.routes.server.ts": {
+    "mtime": 1784397572.4581594,
+    "ast_hash": "8fcdaf6e67229219fb19599b93fb4d69",
+    "semantic_hash": "8fcdaf6e67229219fb19599b93fb4d69"
+  },
+  "/home/lollo/Playground/agent-board/src/app/board/board.ts": {
+    "mtime": 1784408894.5188782,
+    "ast_hash": "7282b313a6c876e7d8bc1ea253b1a491",
+    "semantic_hash": "7282b313a6c876e7d8bc1ea253b1a491"
+  },
+  "/home/lollo/Playground/agent-board/src/app/board/board.service.ts": {
+    "mtime": 1784408850.219287,
+    "ast_hash": "4b79d34583c737bd8110f97c4405579a",
+    "semantic_hash": "4b79d34583c737bd8110f97c4405579a"
+  },
+  "/home/lollo/Playground/agent-board/src/app/board/models.ts": {
+    "mtime": 1784408850.219287,
+    "ast_hash": "3d3fdfecdd979366f250ab2d8cd0e799",
+    "semantic_hash": "3d3fdfecdd979366f250ab2d8cd0e799"
+  },
+  "/home/lollo/Playground/agent-board/src/server/db.ts": {
+    "mtime": 1784407925.7557697,
+    "ast_hash": "ff01ed0f7de11ca5120dd959b7dd542b",
+    "semantic_hash": "ff01ed0f7de11ca5120dd959b7dd542b"
+  },
+  "/home/lollo/Playground/agent-board/src/server/api.ts": {
+    "mtime": 1784408812.711633,
+    "ast_hash": "9831e62a236b72283ed8960c65625d9d",
+    "semantic_hash": "9831e62a236b72283ed8960c65625d9d"
+  },
+  "/home/lollo/Playground/agent-board/src/server/mcp.ts": {
+    "mtime": 1784408001.9430768,
+    "ast_hash": "f0f5f8faf09a807331b5fb95a423b8f7",
+    "semantic_hash": "f0f5f8faf09a807331b5fb95a423b8f7"
+  },
+  "/home/lollo/Playground/agent-board/src/server/repo.ts": {
+    "mtime": 1784408812.6676335,
+    "ast_hash": "d9c4bd5a503dcaf21fcc79f23ac88213",
+    "semantic_hash": "d9c4bd5a503dcaf21fcc79f23ac88213"
+  },
+  "/home/lollo/Playground/agent-board/src/server/repo.spec.ts": {
+    "mtime": 1784408894.5188782,
+    "ast_hash": "b0db470056b376c85b45d706b97eea6f",
+    "semantic_hash": "b0db470056b376c85b45d706b97eea6f"
+  },
+  "/home/lollo/Playground/agent-board/hooks/claude-user-prompt.mjs": {
+    "mtime": 1784399686.315763,
+    "ast_hash": "023e12a4732da7c12c8c0e3b1bd43eed",
+    "semantic_hash": "023e12a4732da7c12c8c0e3b1bd43eed"
+  },
+  "/home/lollo/Playground/agent-board/.vscode/launch.json": {
+    "mtime": 1784397572.45765,
+    "ast_hash": "c6799d2f7ae6f5d7a740d1023654bb8d",
+    "semantic_hash": "c6799d2f7ae6f5d7a740d1023654bb8d"
+  },
+  "/home/lollo/Playground/agent-board/.vscode/extensions.json": {
+    "mtime": 1784397572.4574728,
+    "ast_hash": "d3b118b41884c371c18cbd55e392eb07",
+    "semantic_hash": "d3b118b41884c371c18cbd55e392eb07"
+  },
+  "/home/lollo/Playground/agent-board/.vscode/tasks.json": {
+    "mtime": 1784397572.4576766,
+    "ast_hash": "903821282d5c5b46a4673a263eeb9dee",
+    "semantic_hash": "903821282d5c5b46a4673a263eeb9dee"
+  },
+  "/home/lollo/Playground/agent-board/PRODUCT.md": {
+    "mtime": 1784407302.737325,
+    "ast_hash": "31a141fd8e721d749539adcbc4a0f248",
+    "semantic_hash": "31a141fd8e721d749539adcbc4a0f248"
+  },
+  "/home/lollo/Playground/agent-board/docker-compose.yml": {
+    "mtime": 1784399025.0971913,
+    "ast_hash": "ad168294990290c78dfd304f51f4c3a9",
+    "semantic_hash": "ad168294990290c78dfd304f51f4c3a9"
+  },
+  "/home/lollo/Playground/agent-board/CLAUDE.md": {
+    "mtime": 1784408068.170473,
+    "ast_hash": "ad163d8f36e1e7c2b148a4a7de0387ab",
+    "semantic_hash": "ad163d8f36e1e7c2b148a4a7de0387ab"
+  },
+  "/home/lollo/Playground/agent-board/AGENTS.md": {
+    "mtime": 1784408068.170473,
+    "ast_hash": "ad163d8f36e1e7c2b148a4a7de0387ab",
+    "semantic_hash": "ad163d8f36e1e7c2b148a4a7de0387ab"
+  },
+  "/home/lollo/Playground/agent-board/README.md": {
+    "mtime": 1784408928.4545648,
+    "ast_hash": "2b3322b309605cad5a7cd8f888893310",
+    "semantic_hash": "2b3322b309605cad5a7cd8f888893310"
+  },
+  "/home/lollo/Playground/agent-board/noctalia/agent-board/README.md": {
+    "mtime": 1784399177.9992375,
+    "ast_hash": "0f83069f566158286e4845d6bb6da27a",
+    "semantic_hash": "0f83069f566158286e4845d6bb6da27a"
+  },
+  "/home/lollo/Playground/agent-board/docs/superpowers/plans/2026-07-18-board-hardening-ui-polish.md": {
+    "mtime": 1784407102.1950414,
+    "ast_hash": "679d09e2fb95d3540454211667cb8394",
+    "semantic_hash": "679d09e2fb95d3540454211667cb8394"
+  },
+  "/home/lollo/Playground/agent-board/src/index.html": {
+    "mtime": 1784397572.4577649,
+    "ast_hash": "215754001bc4ab5ca25e537a6a8ff847",
+    "semantic_hash": "215754001bc4ab5ca25e537a6a8ff847"
+  },
+  "/home/lollo/Playground/agent-board/src/app/app.html": {
+    "mtime": 1784397928.2509034,
+    "ast_hash": "eb2ce819db0e019d9b8afee11e3b5828",
+    "semantic_hash": "eb2ce819db0e019d9b8afee11e3b5828"
+  },
+  "/home/lollo/Playground/agent-board/src/app/board/board.html": {
+    "mtime": 1784408850.219287,
+    "ast_hash": "7c550aa0b7a9bbf91861debeeba5110d",
+    "semantic_hash": "7c550aa0b7a9bbf91861debeeba5110d"
+  }
+}

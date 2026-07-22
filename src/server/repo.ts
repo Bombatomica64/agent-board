@@ -9,13 +9,7 @@
 import { db, now } from './db';
 
 /** Lifecycle states a task can be in. */
-export type TaskStatus =
-  | 'todo'
-  | 'claimed'
-  | 'in_progress'
-  | 'blocked'
-  | 'done'
-  | 'abandoned';
+export type TaskStatus = 'todo' | 'claimed' | 'in_progress' | 'blocked' | 'done' | 'abandoned';
 
 /** Known agent runtimes, used only for display/filtering. */
 export type AgentKind = 'claude' | 'codex' | 'other';
@@ -94,11 +88,7 @@ function logActivity(entry: {
 }
 
 /** Upsert an agent heartbeat, refreshing `last_seen`. */
-export function heartbeat(input: {
-  name: string;
-  kind?: AgentKind;
-  host?: string;
-}): Agent {
+export function heartbeat(input: { name: string; kind?: AgentKind; host?: string }): Agent {
   const ts = now();
   db()
     .prepare(
@@ -115,16 +105,12 @@ export function heartbeat(input: {
       host: input.host ?? null,
       ts,
     });
-  return db()
-    .prepare(`SELECT * FROM agents WHERE id = ?`)
-    .get(input.name) as unknown as Agent;
+  return db().prepare(`SELECT * FROM agents WHERE id = ?`).get(input.name) as unknown as Agent;
 }
 
 /** List all known agents, most-recently-seen first. */
 export function listAgents(): Agent[] {
-  return db()
-    .prepare(`SELECT * FROM agents ORDER BY last_seen DESC`)
-    .all() as unknown as Agent[];
+  return db().prepare(`SELECT * FROM agents ORDER BY last_seen DESC`).all() as unknown as Agent[];
 }
 
 /** Options for filtering the task list. */
@@ -161,10 +147,12 @@ export function listTasks(query: TaskQuery = {}): Task[] {
 }
 
 /** Recently completed work shown briefly outside the active workflow lanes. */
-export function listRecentlyCompleted(query: {
-  repo?: string;
-  limit?: number;
-} = {}): Task[] {
+export function listRecentlyCompleted(
+  query: {
+    repo?: string;
+    limit?: number;
+  } = {},
+): Task[] {
   const limit = Math.min(Math.max(query.limit ?? 8, 1), 50);
   const clauses = [`status = 'done'`, `updated_at >= @archive_cutoff`];
   const params: Record<string, string | number> = {
@@ -184,11 +172,13 @@ export function listRecentlyCompleted(query: {
 }
 
 /** Search completed work once it has aged out of the operational board. */
-export function listArchivedTasks(query: {
-  repo?: string;
-  q?: string;
-  limit?: number;
-} = {}): Task[] {
+export function listArchivedTasks(
+  query: {
+    repo?: string;
+    q?: string;
+    limit?: number;
+  } = {},
+): Task[] {
   const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
   const clauses = [`status = 'done'`, `updated_at < @archive_cutoff`];
   const params: Record<string, string | number> = {
@@ -200,7 +190,9 @@ export function listArchivedTasks(query: {
     params['repo'] = query.repo;
   }
   if (query.q) {
-    clauses.push('(title LIKE @like OR body LIKE @like OR tags LIKE @like OR created_by LIKE @like)');
+    clauses.push(
+      '(title LIKE @like OR body LIKE @like OR tags LIKE @like OR created_by LIKE @like)',
+    );
     params['like'] = `%${query.q}%`;
   }
   return db()
@@ -213,16 +205,14 @@ export function listArchivedTasks(query: {
 
 /** Fetch a single task by id, or `undefined` if it does not exist. */
 export function getTask(id: number): Task | undefined {
-  return db().prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as unknown as
-    | Task
-    | undefined;
+  return db().prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as unknown as Task | undefined;
 }
 
 /** Distinct repo names currently represented on the board. */
 export function listRepos(): string[] {
-  const rows = db()
-    .prepare(`SELECT DISTINCT repo FROM tasks ORDER BY repo`)
-    .all() as unknown as { repo: string }[];
+  const rows = db().prepare(`SELECT DISTINCT repo FROM tasks ORDER BY repo`).all() as unknown as {
+    repo: string;
+  }[];
   return rows.map((r) => r.repo);
 }
 
@@ -287,11 +277,7 @@ const STATUS_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = 
   abandoned: ['todo'],
 };
 
-const OWNED_STATES: readonly TaskStatus[] = [
-  'claimed',
-  'in_progress',
-  'blocked',
-];
+const OWNED_STATES: readonly TaskStatus[] = ['claimed', 'in_progress', 'blocked'];
 
 /**
  * Atomically claim a task for `agent`.
@@ -359,10 +345,7 @@ export function setStatus(
   if (!STATUS_TRANSITIONS[existing.status].includes(status)) {
     return { ok: false, reason: 'invalid_transition', task: existing };
   }
-  if (
-    OWNED_STATES.includes(existing.status) &&
-    (!agent || existing.claimed_by !== agent)
-  ) {
+  if (OWNED_STATES.includes(existing.status) && (!agent || existing.claimed_by !== agent)) {
     return { ok: false, reason: 'conflict', task: existing };
   }
 
@@ -467,9 +450,7 @@ export function listActivity(query: { repo?: string; limit?: number } = {}): Act
   const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
   if (query.repo) {
     return db()
-      .prepare(
-        `SELECT * FROM activity WHERE repo = ? ORDER BY created_at DESC LIMIT ?`,
-      )
+      .prepare(`SELECT * FROM activity WHERE repo = ? ORDER BY created_at DESC LIMIT ?`)
       .all(query.repo, limit) as unknown as Activity[];
   }
   return db()
@@ -489,16 +470,30 @@ export function sendMessage(input: {
       `INSERT INTO messages (sender, recipient, body, thread_id, created_at)
        VALUES (?, ?, ?, ?, ?)`,
     )
-    .run(
-      input.sender,
-      input.recipient,
-      input.body,
-      input.thread_id?.trim() || null,
-      now(),
-    );
+    .run(input.sender, input.recipient, input.body, input.thread_id?.trim() || null, now());
   return db()
     .prepare(`SELECT * FROM messages WHERE id = ?`)
     .get(Number(result.lastInsertRowid)) as unknown as MailMessage;
+}
+
+/** Read the shared message transcript in chronological order. */
+export function listMessages(
+  input: {
+    after_id?: number;
+    limit?: number;
+  } = {},
+): MailMessage[] {
+  const limit = Math.min(Math.max(input.limit ?? 200, 1), 200);
+  return db()
+    .prepare(
+      `SELECT * FROM (
+         SELECT * FROM messages
+         WHERE id > @after_id
+         ORDER BY id DESC
+         LIMIT @limit
+       ) ORDER BY id ASC`,
+    )
+    .all({ after_id: input.after_id ?? 0, limit }) as unknown as MailMessage[];
 }
 
 /** Read an agent inbox in ascending order so cursors advance naturally. */
@@ -527,10 +522,7 @@ export function readInbox(input: {
 }
 
 /** Acknowledge one message, only when the caller is its intended recipient. */
-export function acknowledgeMessage(
-  id: number,
-  agent: string,
-): MailMessage | undefined {
+export function acknowledgeMessage(id: number, agent: string): MailMessage | undefined {
   db()
     .prepare(
       `UPDATE messages

@@ -5,13 +5,7 @@
  */
 
 /** Lifecycle states a task can be in, in board column order. */
-export type TaskStatus =
-  | 'todo'
-  | 'claimed'
-  | 'in_progress'
-  | 'blocked'
-  | 'done'
-  | 'abandoned';
+export type TaskStatus = 'todo' | 'claimed' | 'in_progress' | 'blocked' | 'done' | 'abandoned';
 
 /** Known agent runtimes. */
 export type AgentKind = 'claude' | 'codex' | 'other';
@@ -39,6 +33,16 @@ export interface Agent {
   host: string | null;
   created_at: number;
   last_seen: number;
+}
+
+export interface MailMessage {
+  id: number;
+  sender: string;
+  recipient: string;
+  body: string;
+  thread_id: string | null;
+  created_at: number;
+  acked_at: number | null;
 }
 
 /** The board columns, in display order, with human labels. */

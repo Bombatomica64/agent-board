@@ -6,18 +6,12 @@
  * calls `reload()` so agents' changes show up without a manual refresh. Writes
  * go through `HttpClient` and then trigger a reload of the affected resources.
  */
-import {
-  Injectable,
-  PLATFORM_ID,
-  computed,
-  inject,
-  signal,
-} from '@angular/core';
+import { Injectable, PLATFORM_ID, computed, inject, signal } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import type { Agent, Task, TaskStatus } from './models';
+import type { Agent, MailMessage, Task, TaskStatus } from './models';
 
 /** How often (ms) the browser re-polls the board for other agents' changes. */
 const POLL_INTERVAL_MS = 4000;
@@ -60,6 +54,10 @@ export class BoardService {
     defaultValue: [],
   });
 
+  readonly messages = httpResource<MailMessage[]>(() => `/api/messages?limit=200`, {
+    defaultValue: [],
+  });
+
   readonly recentlyCompleted = httpResource<Task[]>(
     () => {
       const repo = this.repoFilter();
@@ -68,14 +66,17 @@ export class BoardService {
     { defaultValue: [] },
   );
 
-  readonly archive = httpResource<Task[]>(() => {
-    const params = new URLSearchParams({ limit: '200' });
-    const repo = this.repoFilter();
-    const q = this.archiveSearch().trim();
-    if (repo) params.set('repo', repo);
-    if (q) params.set('q', q);
-    return `/api/archive?${params.toString()}`;
-  }, { defaultValue: [] });
+  readonly archive = httpResource<Task[]>(
+    () => {
+      const params = new URLSearchParams({ limit: '200' });
+      const repo = this.repoFilter();
+      const q = this.archiveSearch().trim();
+      if (repo) params.set('repo', repo);
+      if (q) params.set('q', q);
+      return `/api/archive?${params.toString()}`;
+    },
+    { defaultValue: [] },
+  );
 
   /** Distinct repo names, for the filter dropdown. */
   readonly repos = httpResource<string[]>(() => `/api/repos`, {
@@ -95,6 +96,7 @@ export class BoardService {
     this.recentlyCompleted.reload();
     this.archive.reload();
     this.repos.reload();
+    this.messages.reload();
   }
 
   /** Create a new task, then refresh. */
@@ -132,21 +134,23 @@ export class BoardService {
 
   /** Release a claim back to the todo column. */
   async release(id: number, agent: string): Promise<void> {
-    await this.runMutation(
-      firstValueFrom(this.http.post(`/api/tasks/${id}/release`, { agent })),
-    );
+    await this.runMutation(firstValueFrom(this.http.post(`/api/tasks/${id}/release`, { agent })));
   }
 
   /** Move a task to a new status. */
   async setStatus(id: number, status: TaskStatus, agent: string): Promise<void> {
-    await this.runMutation(firstValueFrom(
-      this.http.post(`/api/tasks/${id}/status`, { status, agent }),
-    ));
+    await this.runMutation(
+      firstValueFrom(this.http.post(`/api/tasks/${id}/status`, { status, agent })),
+    );
   }
 
   /** Delete a task. */
   async remove(id: number): Promise<void> {
     await this.runMutation(firstValueFrom(this.http.delete(`/api/tasks/${id}`)));
+  }
+
+  async sendMessage(from: string, to: string, message: string): Promise<void> {
+    await this.runMutation(firstValueFrom(this.http.post('/api/messages', { from, to, message })));
   }
 
   private async runMutation(request: Promise<unknown>): Promise<void> {

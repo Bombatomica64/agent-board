@@ -4,10 +4,31 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 import {
   acknowledgeMessage,
+  claimTask,
+  commentTask,
+  createTask,
+  getTask,
+  heartbeat,
+  listActivity,
   listAgents,
+  listTasks,
   readInbox,
+  releaseTask,
   sendMessage,
+  setStatus,
+  type AgentKind,
+  type TaskStatus,
 } from './repo';
+
+const TASK_STATUSES = [
+  'todo',
+  'claimed',
+  'in_progress',
+  'blocked',
+  'done',
+  'abandoned',
+] as const satisfies readonly TaskStatus[];
+const AGENT_KINDS = ['claude', 'codex', 'other'] as const satisfies readonly AgentKind[];
 
 function toolResult(value: unknown) {
   return {
@@ -16,14 +37,166 @@ function toolResult(value: unknown) {
   };
 }
 
+function toolError(message: string, value?: unknown) {
+  return {
+    content: [{ type: 'text' as const, text: message }],
+    ...(value === undefined ? {} : { structuredContent: value as Record<string, unknown> }),
+    isError: true,
+  };
+}
+
 /** Create one stateless MCP server instance for a single HTTP request. */
 export function createMailboxMcpServer(): McpServer {
   const server = new McpServer(
-    { name: 'agent-board-mailbox', version: '1.0.0' },
+    { name: 'agent-board', version: '1.1.0' },
     {
       instructions:
-        'Use send_message for agent-to-agent notes. Check read_inbox at useful boundaries and acknowledge_message after acting on a message.',
+        'Coordinate shared work through heartbeat, list_tasks, post_task, claim_task, set_task_status, release_task, and comment_task. Use mailbox tools for notes addressed to one agent.',
     },
+  );
+
+  server.registerTool(
+    'heartbeat',
+    {
+      description: 'Register or refresh an agent identity on the shared board.',
+      inputSchema: {
+        agent: z.string().trim().min(1),
+        kind: z.enum(AGENT_KINDS).optional(),
+        host: z.string().trim().min(1).optional(),
+      },
+    },
+    async ({ agent, kind, host }) => toolResult({ agent: heartbeat({ name: agent, kind, host }) }),
+  );
+
+  server.registerTool(
+    'list_tasks',
+    {
+      description: 'List tasks visible on the shared Kanban board.',
+      inputSchema: {
+        repo: z.string().trim().min(1).optional(),
+        status: z.enum(TASK_STATUSES).optional(),
+        q: z.string().trim().min(1).optional(),
+      },
+    },
+    async ({ repo, status, q }) => toolResult({ tasks: listTasks({ repo, status, q }) }),
+  );
+
+  server.registerTool(
+    'post_task',
+    {
+      description: 'Post a new task to the shared Kanban board.',
+      inputSchema: {
+        title: z.string().trim().min(1).max(500),
+        repo: z.string().trim().min(1).optional(),
+        body: z.string().max(16_000).optional(),
+        tags: z.string().max(1_000).optional(),
+        priority: z.number().int().optional(),
+        agent: z.string().trim().min(1).optional(),
+      },
+    },
+    async ({ title, repo, body, tags, priority, agent }) =>
+      toolResult({
+        task: createTask({ title, repo, body, tags, priority, created_by: agent }),
+      }),
+  );
+
+  server.registerTool(
+    'get_task',
+    {
+      description: 'Fetch one shared-board task by id.',
+      inputSchema: { task_id: z.number().int().positive() },
+    },
+    async ({ task_id }) => {
+      const task = getTask(task_id);
+      return task
+        ? toolResult({ task })
+        : toolError(`Task #${task_id} was not found.`, { reason: 'not_found' });
+    },
+  );
+
+  server.registerTool(
+    'claim_task',
+    {
+      description: 'Atomically claim a free task for an agent.',
+      inputSchema: { task_id: z.number().int().positive(), agent: z.string().trim().min(1) },
+    },
+    async ({ task_id, agent }) => {
+      const result = claimTask(task_id, agent);
+      return result.ok
+        ? toolResult({ task: result.task })
+        : toolError(
+            result.reason === 'not_found'
+              ? `Task #${task_id} was not found.`
+              : `Task #${task_id} is already owned by ${result.task.claimed_by ?? 'another agent'}.`,
+            result,
+          );
+    },
+  );
+
+  server.registerTool(
+    'release_task',
+    {
+      description: 'Release an agent-owned claim back to the shared task pool.',
+      inputSchema: { task_id: z.number().int().positive(), agent: z.string().trim().min(1) },
+    },
+    async ({ task_id, agent }) => {
+      const result = releaseTask(task_id, agent);
+      return result.ok
+        ? toolResult({ task: result.task })
+        : toolError(
+            result.reason === 'not_found'
+              ? `Task #${task_id} was not found.`
+              : `Task #${task_id} is not claimed by ${agent}.`,
+            result,
+          );
+    },
+  );
+
+  server.registerTool(
+    'set_task_status',
+    {
+      description: 'Advance, block, resume, complete, abandon, or reopen a task.',
+      inputSchema: {
+        task_id: z.number().int().positive(),
+        status: z.enum(TASK_STATUSES),
+        agent: z.string().trim().min(1),
+        message: z.string().trim().min(1).max(16_000).optional(),
+      },
+    },
+    async ({ task_id, status, agent, message }) => {
+      const result = setStatus(task_id, status, agent, message);
+      return result.ok
+        ? toolResult({ task: result.task })
+        : toolError(`Could not set task #${task_id} to ${status}: ${result.reason}.`, result);
+    },
+  );
+
+  server.registerTool(
+    'comment_task',
+    {
+      description: 'Add an agent comment to a shared-board task.',
+      inputSchema: {
+        task_id: z.number().int().positive(),
+        agent: z.string().trim().min(1),
+        message: z.string().trim().min(1).max(16_000),
+      },
+    },
+    async ({ task_id, agent, message }) =>
+      commentTask(task_id, agent, message)
+        ? toolResult({ posted: true, task_id })
+        : toolError(`Task #${task_id} was not found.`, { reason: 'not_found' }),
+  );
+
+  server.registerTool(
+    'list_activity',
+    {
+      description: 'Read recent public activity from the shared board.',
+      inputSchema: {
+        repo: z.string().trim().min(1).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    async ({ repo, limit }) => toolResult({ activity: listActivity({ repo, limit }) }),
   );
 
   server.registerTool(

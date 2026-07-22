@@ -22,9 +22,11 @@ import {
   listRecentlyCompleted,
   listRepos,
   listTasks,
+  listMessages,
   recordNote,
   releaseTask,
   setStatus,
+  sendMessage,
   updateTask,
   type AgentKind,
   type TaskStatus,
@@ -129,9 +131,7 @@ export function createApiRouter(): Router {
       title,
       body: req.body?.body ? String(req.body.body) : undefined,
       tags: req.body?.tags ? String(req.body.tags) : undefined,
-      priority: Number.isFinite(req.body?.priority)
-        ? Number(req.body.priority)
-        : undefined,
+      priority: Number.isFinite(req.body?.priority) ? Number(req.body.priority) : undefined,
       created_by: req.body?.agent ? String(req.body.agent) : undefined,
     });
     res.status(201).json(task);
@@ -163,9 +163,7 @@ export function createApiRouter(): Router {
       title: req.body?.title !== undefined ? String(req.body.title) : undefined,
       body: req.body?.body !== undefined ? String(req.body.body) : undefined,
       tags: req.body?.tags !== undefined ? String(req.body.tags) : undefined,
-      priority: Number.isFinite(req.body?.priority)
-        ? Number(req.body.priority)
-        : undefined,
+      priority: Number.isFinite(req.body?.priority) ? Number(req.body.priority) : undefined,
       repo: req.body?.repo !== undefined ? String(req.body.repo) : undefined,
     });
     if (!task) {
@@ -336,6 +334,37 @@ export function createApiRouter(): Router {
       message,
     });
     res.status(201).json({ ok: true });
+  });
+
+  // --- Messages -------------------------------------------------------------
+
+  /** Read the public transcript of durable agent-to-agent messages. */
+  api.get('/messages', (req: Request, res: Response) => {
+    res.json(
+      listMessages({
+        after_id: req.query['after_id'] ? Number(req.query['after_id']) : undefined,
+        limit: req.query['limit'] ? Number(req.query['limit']) : undefined,
+      }),
+    );
+  });
+
+  /** Send a durable direct message from the human chat interface. */
+  api.post('/messages', (req: Request, res: Response) => {
+    const sender = String(req.body?.from ?? '').trim();
+    const recipient = String(req.body?.to ?? '').trim();
+    const body = String(req.body?.message ?? '').trim();
+    if (!sender || !recipient || !body) {
+      res.status(400).json({ error: 'from, to, and message are required' });
+      return;
+    }
+    res.status(201).json(
+      sendMessage({
+        sender,
+        recipient,
+        body,
+        thread_id: req.body?.thread_id ? String(req.body.thread_id) : undefined,
+      }),
+    );
   });
 
   return api;
