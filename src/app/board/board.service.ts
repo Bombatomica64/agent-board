@@ -11,7 +11,7 @@ import { isPlatformBrowser } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import type { Agent, MailMessage, Task, TaskStatus } from './models';
+import type { Agent, Channel, MailMessage, Task, TaskStatus } from './models';
 
 /** How often (ms) the browser re-polls the board for other agents' changes. */
 const POLL_INTERVAL_MS = 4000;
@@ -58,6 +58,11 @@ export class BoardService {
     defaultValue: [],
   });
 
+  /** Every group-chat channel with its membership. */
+  readonly channels = httpResource<Channel[]>(() => `/api/channels`, {
+    defaultValue: [],
+  });
+
   readonly recentlyCompleted = httpResource<Task[]>(
     () => {
       const repo = this.repoFilter();
@@ -97,6 +102,7 @@ export class BoardService {
     this.archive.reload();
     this.repos.reload();
     this.messages.reload();
+    this.channels.reload();
   }
 
   /** Create a new task, then refresh. */
@@ -153,12 +159,30 @@ export class BoardService {
     await this.runMutation(firstValueFrom(this.http.post('/api/messages', { from, to, message })));
   }
 
-  private async runMutation(request: Promise<unknown>): Promise<void> {
+  /** Create a group-chat channel, seeded with `members`, then refresh. */
+  async createChannel(name: string, agent: string, members: string[]): Promise<Channel> {
+    return this.runMutation(
+      firstValueFrom(this.http.post<Channel>('/api/channels', { name, agent, members })),
+    );
+  }
+
+  /** Add `agent` to a channel, then refresh. */
+  async joinChannel(id: string, agent: string): Promise<void> {
+    await this.runMutation(firstValueFrom(this.http.post(`/api/channels/${id}/join`, { agent })));
+  }
+
+  /** Remove `agent` from a channel, then refresh. */
+  async leaveChannel(id: string, agent: string): Promise<void> {
+    await this.runMutation(firstValueFrom(this.http.post(`/api/channels/${id}/leave`, { agent })));
+  }
+
+  private async runMutation<T>(request: Promise<T>): Promise<T> {
     this.errorMessage.set(null);
     this.mutationPending.set(true);
     try {
-      await request;
+      const result = await request;
       this.reloadAll();
+      return result;
     } catch (error: unknown) {
       this.errorMessage.set(this.messageFor(error));
       this.reloadAll();

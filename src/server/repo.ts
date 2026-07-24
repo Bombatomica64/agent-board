@@ -60,9 +60,65 @@ export interface MailMessage {
   acked_at: number | null;
 }
 
+export type SendMessageResult =
+  { ok: true; message: MailMessage } | { ok: false; reason: 'recipient_not_found' };
+
+/** A group chat channel. Messages sent to it fan out to every member's inbox. */
+export interface Channel {
+  id: string;
+  name: string;
+  created_by: string | null;
+  created_at: number;
+  members: string[];
+}
+
+/**
+ * Message recipients starting with this prefix address a channel rather than a
+ * single agent. The stored channel id is the token without the prefix.
+ */
+export const CHANNEL_PREFIX = '#';
+
+/** True when a message recipient addresses a channel instead of an agent. */
+export function isChannelRecipient(recipient: string): boolean {
+  return recipient.startsWith(CHANNEL_PREFIX);
+}
+
+/** The message recipient token for a channel id (e.g. `general` -> `#general`). */
+export function channelRecipient(id: string): string {
+  return `${CHANNEL_PREFIX}${id}`;
+}
+
+/** Normalise a free-form channel name into a stable slug id. */
+export function channelSlug(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
 /** Statuses that leave a task free for another agent to pick up. */
 const CLAIMABLE_STATES: TaskStatus[] = ['todo', 'abandoned'];
 export const ARCHIVE_AFTER_MS = 15 * 60 * 1000;
+const DEFAULT_AGENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function configuredDuration(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+/** How long an agent remains addressable after its last heartbeat. */
+export const AGENT_TTL_MS = configuredDuration('AGENT_BOARD_AGENT_TTL_MS', DEFAULT_AGENT_TTL_MS);
+
+/** Remove identities whose agent processes can no longer be assumed to exist. */
+function pruneExpiredAgents(): void {
+  db()
+    .prepare(`DELETE FROM agents WHERE last_seen < ?`)
+    .run(now() - AGENT_TTL_MS);
+}
 
 /** Record an entry in the activity feed. Best-effort, never throws to caller. */
 function logActivity(entry: {
@@ -108,8 +164,9 @@ export function heartbeat(input: { name: string; kind?: AgentKind; host?: string
   return db().prepare(`SELECT * FROM agents WHERE id = ?`).get(input.name) as unknown as Agent;
 }
 
-/** List all known agents, most-recently-seen first. */
+/** List active agents, most-recently-seen first. */
 export function listAgents(): Agent[] {
+  pruneExpiredAgents();
   return db().prepare(`SELECT * FROM agents ORDER BY last_seen DESC`).all() as unknown as Agent[];
 }
 
@@ -458,22 +515,34 @@ export function listActivity(query: { repo?: string; limit?: number } = {}): Act
     .all(limit) as unknown as Activity[];
 }
 
-/** Store a message for another agent. Delivery is pull-based through its inbox. */
+/** Store a message for an active agent. Delivery is pull-based through its inbox. */
 export function sendMessage(input: {
   sender: string;
   recipient: string;
   body: string;
   thread_id?: string;
-}): MailMessage {
+}): SendMessageResult {
+  pruneExpiredAgents();
+  const exists = isChannelRecipient(input.recipient)
+    ? db()
+        .prepare(`SELECT 1 FROM channels WHERE id = ?`)
+        .get(input.recipient.slice(CHANNEL_PREFIX.length))
+    : db().prepare(`SELECT 1 FROM agents WHERE id = ?`).get(input.recipient);
+  if (!exists) {
+    return { ok: false, reason: 'recipient_not_found' };
+  }
   const result = db()
     .prepare(
       `INSERT INTO messages (sender, recipient, body, thread_id, created_at)
        VALUES (?, ?, ?, ?, ?)`,
     )
     .run(input.sender, input.recipient, input.body, input.thread_id?.trim() || null, now());
-  return db()
-    .prepare(`SELECT * FROM messages WHERE id = ?`)
-    .get(Number(result.lastInsertRowid)) as unknown as MailMessage;
+  return {
+    ok: true,
+    message: db()
+      .prepare(`SELECT * FROM messages WHERE id = ?`)
+      .get(Number(result.lastInsertRowid)) as unknown as MailMessage,
+  };
 }
 
 /** Read the shared message transcript in chronological order. */
@@ -504,13 +573,35 @@ export function readInbox(input: {
   include_acknowledged?: boolean;
 }): MailMessage[] {
   const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+  // Inbox = direct messages to the agent, plus messages to any channel it is a
+  // member of (excluding its own). Direct messages track "handled" via
+  // acked_at; channel messages are shared rows, so per-agent acks live in
+  // message_acks. The '#' literal mirrors CHANNEL_PREFIX.
   return db()
     .prepare(
-      `SELECT * FROM messages
-       WHERE recipient = @agent
-         AND id > @after_id
-         AND (@include_acknowledged = 1 OR acked_at IS NULL)
-       ORDER BY id ASC
+      `SELECT m.* FROM messages m
+       WHERE m.id > @after_id
+         AND (
+           m.recipient = @agent
+           OR (
+             m.sender != @agent
+             AND m.recipient IN (
+               SELECT '#' || channel_id FROM channel_members WHERE agent = @agent
+             )
+           )
+         )
+         AND (
+           @include_acknowledged = 1
+           OR (m.recipient = @agent AND m.acked_at IS NULL)
+           OR (
+             m.recipient != @agent
+             AND NOT EXISTS (
+               SELECT 1 FROM message_acks a
+               WHERE a.message_id = m.id AND a.agent = @agent
+             )
+           )
+         )
+       ORDER BY m.id ASC
        LIMIT @limit`,
     )
     .all({
@@ -521,16 +612,107 @@ export function readInbox(input: {
     }) as unknown as MailMessage[];
 }
 
-/** Acknowledge one message, only when the caller is its intended recipient. */
+/**
+ * Acknowledge one message. For a direct message only its recipient may ack, via
+ * `messages.acked_at`. For a channel message any member may ack, recorded
+ * per-agent in `message_acks` so one member's ack does not hide it for others.
+ * Returns the message on success, or `undefined` if the agent may not ack it.
+ */
 export function acknowledgeMessage(id: number, agent: string): MailMessage | undefined {
+  const message = db().prepare(`SELECT * FROM messages WHERE id = ?`).get(id) as unknown as
+    MailMessage | undefined;
+  if (!message) return undefined;
+
+  if (isChannelRecipient(message.recipient)) {
+    const channelId = message.recipient.slice(CHANNEL_PREFIX.length);
+    const member = db()
+      .prepare(`SELECT 1 FROM channel_members WHERE channel_id = ? AND agent = ?`)
+      .get(channelId, agent);
+    if (!member) return undefined;
+    db()
+      .prepare(`INSERT OR IGNORE INTO message_acks (message_id, agent, acked_at) VALUES (?, ?, ?)`)
+      .run(id, agent, now());
+    return message;
+  }
+
+  if (message.recipient !== agent) return undefined;
+  db().prepare(`UPDATE messages SET acked_at = COALESCE(acked_at, ?) WHERE id = ?`).run(now(), id);
+  return db().prepare(`SELECT * FROM messages WHERE id = ?`).get(id) as unknown as
+    MailMessage | undefined;
+}
+
+// --- Channels ---------------------------------------------------------------
+
+/** The members of one channel, oldest join first. */
+function channelMembers(channelId: string): string[] {
+  return (
+    db()
+      .prepare(`SELECT agent FROM channel_members WHERE channel_id = ? ORDER BY joined_at ASC`)
+      .all(channelId) as unknown as { agent: string }[]
+  ).map((row) => row.agent);
+}
+
+/** List every channel with its current membership, newest first. */
+export function listChannels(): Channel[] {
+  const rows = db()
+    .prepare(`SELECT * FROM channels ORDER BY created_at DESC`)
+    .all() as unknown as Omit<Channel, 'members'>[];
+  return rows.map((row) => ({ ...row, members: channelMembers(row.id) }));
+}
+
+/** Fetch a single channel by id, or `undefined` if it does not exist. */
+export function getChannel(id: string): Channel | undefined {
+  const row = db().prepare(`SELECT * FROM channels WHERE id = ?`).get(id) as unknown as
+    Omit<Channel, 'members'> | undefined;
+  return row ? { ...row, members: channelMembers(row.id) } : undefined;
+}
+
+export type CreateChannelResult =
+  { ok: true; channel: Channel } | { ok: false; reason: 'invalid_name' | 'already_exists' };
+
+/**
+ * Create a channel from a display name (slugified into its id) and seed it with
+ * an initial member list. The creator, if given, is always a member.
+ */
+export function createChannel(input: {
+  name: string;
+  created_by?: string;
+  members?: string[];
+}): CreateChannelResult {
+  const name = input.name.trim();
+  const id = channelSlug(name);
+  if (!id) return { ok: false, reason: 'invalid_name' };
+  if (db().prepare(`SELECT 1 FROM channels WHERE id = ?`).get(id)) {
+    return { ok: false, reason: 'already_exists' };
+  }
+  const ts = now();
+  db()
+    .prepare(`INSERT INTO channels (id, name, created_by, created_at) VALUES (?, ?, ?, ?)`)
+    .run(id, name, input.created_by ?? null, ts);
+  const seed = new Set([...(input.members ?? []), ...(input.created_by ? [input.created_by] : [])]);
+  const insertMember = db().prepare(
+    `INSERT OR IGNORE INTO channel_members (channel_id, agent, joined_at) VALUES (?, ?, ?)`,
+  );
+  for (const agent of seed) {
+    if (agent.trim()) insertMember.run(id, agent.trim(), ts);
+  }
+  return { ok: true, channel: getChannel(id) as Channel };
+}
+
+/** Add an agent to a channel. Returns the channel, or `undefined` if unknown. */
+export function joinChannel(id: string, agent: string): Channel | undefined {
+  if (!db().prepare(`SELECT 1 FROM channels WHERE id = ?`).get(id)) return undefined;
   db()
     .prepare(
-      `UPDATE messages
-       SET acked_at = COALESCE(acked_at, ?)
-       WHERE id = ? AND recipient = ?`,
+      `INSERT OR IGNORE INTO channel_members (channel_id, agent, joined_at) VALUES (?, ?, ?)`,
     )
-    .run(now(), id, agent);
-  return db()
-    .prepare(`SELECT * FROM messages WHERE id = ? AND recipient = ?`)
-    .get(id, agent) as unknown as MailMessage | undefined;
+    .run(id, agent, now());
+  return getChannel(id);
+}
+
+/** Remove an agent from a channel. Returns the channel, or `undefined` if unknown. */
+export function leaveChannel(id: string, agent: string): Channel | undefined {
+  if (!db().prepare(`SELECT 1 FROM channels WHERE id = ?`).get(id)) return undefined;
+  db().prepare(`DELETE FROM channel_members WHERE channel_id = ? AND agent = ?`).run(id, agent);
+  return getChannel(id);
 }

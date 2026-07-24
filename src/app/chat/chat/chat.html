@@ -10,6 +10,46 @@
       >
         <span class="channel-symbol" aria-hidden="true">#</span>All messages
       </button>
+
+      <div class="rail-section-head">
+        <p>Channels</p>
+        <button
+          type="button"
+          class="rail-add"
+          (click)="composingChannel.set(!composingChannel())"
+          [attr.aria-expanded]="composingChannel()"
+          aria-label="New channel"
+        >
+          +
+        </button>
+      </div>
+      @if (composingChannel()) {
+        <form class="new-channel" (submit)="$event.preventDefault(); createChannel()">
+          <input
+            type="text"
+            [value]="newChannelName()"
+            (input)="onNewChannelInput($event)"
+            placeholder="channel name"
+            aria-label="New channel name"
+          />
+          <button type="submit" [disabled]="!newChannelName().trim() || board.mutationPending()">
+            Create
+          </button>
+        </form>
+      }
+      @for (ch of board.channels.value(); track ch.id) {
+        <button
+          type="button"
+          (click)="selectChannel(channelToken(ch))"
+          [class.active]="channel() === channelToken(ch)"
+          [attr.aria-current]="channel() === channelToken(ch) ? 'page' : null"
+        >
+          <span class="channel-symbol" aria-hidden="true">#</span>{{ ch.name }}
+        </button>
+      } @empty {
+        <p class="rail-empty">No channels yet.</p>
+      }
+
       <p>Direct messages</p>
       <cdk-virtual-scroll-viewport
         class="agent-viewport"
@@ -35,14 +75,16 @@
     <header class="conversation-header">
       <div>
         <h2 id="conversation-title">
-          {{ channel() === 'all' ? '# all-messages' : '@' + channel() }}
+          {{ channel() === 'all' ? '# all-messages' : isChannel() ? channel() : '@' + channel() }}
         </h2>
         <p>
-          {{
-            channel() === 'all'
-              ? 'Every durable message sent through Agent Board.'
-              : 'Messages involving this agent.'
-          }}
+          @if (channel() === 'all') {
+            Every durable message sent through Agent Board.
+          } @else if (isChannel()) {
+            Group channel · {{ activeChannel()?.members?.length ?? 0 }} members
+          } @else {
+            Messages involving this agent.
+          }
         </p>
       </div>
       <span>{{ visibleMessages().length }} messages</span>
@@ -72,15 +114,19 @@
     <form class="composer" (submit)="$event.preventDefault(); send()">
       <label class="recipient-field">
         <span>To</span>
-        <select
-          [value]="effectiveRecipient()"
-          (change)="onRecipientChange($event)"
-          [disabled]="board.agents.value().length === 0"
-        >
-          @for (agent of board.agents.value(); track agent.id) {
-            <option [value]="agent.id">{{ agent.id }}</option>
-          }
-        </select>
+        @if (channel() === 'all') {
+          <select
+            [value]="composerTarget()"
+            (change)="onRecipientChange($event)"
+            [disabled]="board.agents.value().length === 0"
+          >
+            @for (agent of board.agents.value(); track agent.id) {
+              <option [value]="agent.id">{{ agent.id }}</option>
+            }
+          </select>
+        } @else {
+          <strong class="composer-target">{{ isChannel() ? channel() : '@' + channel() }}</strong>
+        }
       </label>
       <label class="message-field">
         <span class="sr-only">Message</span>
@@ -90,9 +136,11 @@
           (input)="onDraftInput($event)"
           (keydown)="onComposerKeydown($event)"
           [placeholder]="
-            effectiveRecipient() ? 'Message @' + effectiveRecipient() : 'No agents available'
+            composerTarget()
+              ? 'Message ' + (isChannel() ? channel() : '@' + composerTarget())
+              : 'No agents available'
           "
-          [disabled]="!effectiveRecipient()"
+          [disabled]="!composerTarget()"
         ></textarea>
       </label>
       <div class="composer-actions">
@@ -100,7 +148,7 @@
         <button
           class="primary"
           type="submit"
-          [disabled]="!draft().trim() || !effectiveRecipient() || board.mutationPending()"
+          [disabled]="!draft().trim() || !composerTarget() || board.mutationPending()"
         >
           {{ board.mutationPending() ? 'Sending…' : 'Send' }}
         </button>

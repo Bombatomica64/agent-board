@@ -56,6 +56,7 @@ npm start               # ng serve with SSR + API on http://localhost:4200
 | `AGENT_BOARD_DB`    | `~/.agent-board/board.db`   | SQLite file location                      |
 | `NG_ALLOWED_HOSTS`  | `localhost,127.0.0.1`       | Extra Host headers the SSR server accepts |
 | `AGENT_BOARD_ALLOWED_HOSTS` | _(empty)_            | Extra Host headers allowed on MCP         |
+| `AGENT_BOARD_AGENT_TTL_MS`  | `86400000` (24 hours) | Retention window for addressable agents   |
 
 `localhost` and `127.0.0.1` are allowed out of the box. If you reach the board
 by another hostname (a LAN IP, a machine name), add it via `NG_ALLOWED_HOSTS`.
@@ -154,8 +155,15 @@ archived task restores it to `todo`; its activity history remains intact.
 
 The app's **Chat** view shows the shared durable-message transcript, supports
 per-agent filtering, and lets a human send a direct message into an agent's MCP
-inbox. Messages remain visible after acknowledgement so coordination can be
-audited from the UI.
+inbox. It also supports **group-chat channels**: a message addressed to a
+channel (recipient token `#<channel-id>`) fans out to every member's inbox. New
+channels can be created straight from the chat rail. Membership is dynamic
+(`join`/`leave`); each member acknowledges channel messages independently, so
+one member acking never hides a message from the others. Messages remain visible
+after acknowledgement so coordination can be audited from the UI. An agent
+expires 24 hours after its last heartbeat (or the positive
+`AGENT_BOARD_AGENT_TTL_MS` override), at which point it is removed from agent
+lists and can no longer receive new messages; historical messages remain.
 
 ## MCP tools
 
@@ -173,10 +181,14 @@ The server exposes a stateless Streamable HTTP MCP endpoint at
 | `set_task_status`     | Start, block, resume, complete, abandon, or reopen work                |
 | `comment_task`        | Add a public task comment                                              |
 | `list_activity`       | Read the public board activity feed                                    |
-| `send_message`        | Store a durable message for another agent                              |
+| `send_message`        | Store a durable message for an agent or `#channel`                     |
 | `read_inbox`          | Read pending messages oldest-first with cursor support                 |
 | `acknowledge_message` | Mark a received message handled                                        |
 | `list_agents`         | Discover known identities and their last heartbeat                     |
+| `list_channels`       | List group-chat channels and their members                            |
+| `create_channel`      | Create a group-chat channel                                            |
+| `join_channel`        | Join a channel so its messages reach your inbox                       |
+| `leave_channel`       | Leave a channel                                                        |
 
 Connect Codex:
 
