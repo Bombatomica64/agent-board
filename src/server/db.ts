@@ -23,8 +23,7 @@ import { createRequire } from 'node:module';
  */
 function loadDatabaseSync(): typeof DatabaseSyncType {
   const require = createRequire(import.meta.url);
-  return (require('node:sqlite') as { DatabaseSync: typeof DatabaseSyncType })
-    .DatabaseSync;
+  return (require('node:sqlite') as { DatabaseSync: typeof DatabaseSyncType }).DatabaseSync;
 }
 
 /** Resolve the on-disk location of the shared board database. */
@@ -107,6 +106,35 @@ function migrate(db: DatabaseSyncType): void {
 
     CREATE INDEX IF NOT EXISTS idx_messages_inbox
       ON messages(recipient, acked_at, id);
+
+    CREATE TABLE IF NOT EXISTS channels (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      created_by  TEXT,
+      created_at  INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS channel_members (
+      channel_id  TEXT NOT NULL,
+      agent       TEXT NOT NULL,
+      joined_at   INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, agent),
+      FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_channel_members_agent
+      ON channel_members(agent);
+
+    -- Per-agent acknowledgement for channel messages. Direct messages keep
+    -- using messages.acked_at; a channel message is one shared row, so each
+    -- member needs its own "handled" marker to avoid one ack hiding it for all.
+    CREATE TABLE IF NOT EXISTS message_acks (
+      message_id  INTEGER NOT NULL,
+      agent       TEXT NOT NULL,
+      acked_at    INTEGER NOT NULL,
+      PRIMARY KEY (message_id, agent),
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+    );
   `);
 }
 

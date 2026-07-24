@@ -45,6 +45,18 @@ export interface MailMessage {
   acked_at: number | null;
 }
 
+/** A group-chat channel. Messages sent to it fan out to every member's inbox. */
+export interface Channel {
+  id: string;
+  name: string;
+  created_by: string | null;
+  created_at: number;
+  members: string[];
+}
+
+/** Recipient prefix that marks a message as addressed to a channel. */
+export const CHANNEL_PREFIX = '#';
+
 /** The board columns, in display order, with human labels. */
 export const COLUMNS: readonly { status: TaskStatus; label: string }[] = [
   { status: 'todo', label: 'To do' },

@@ -6,11 +6,15 @@ import {
   acknowledgeMessage,
   claimTask,
   commentTask,
+  createChannel,
   createTask,
   getTask,
   heartbeat,
+  joinChannel,
+  leaveChannel,
   listActivity,
   listAgents,
+  listChannels,
   listTasks,
   readInbox,
   releaseTask,
@@ -210,15 +214,20 @@ export function createMailboxMcpServer(): McpServer {
         thread_id: z.string().trim().min(1).max(200).optional(),
       },
     },
-    async ({ from, to, message, thread_id }) =>
-      toolResult({
-        message: sendMessage({
-          sender: from,
-          recipient: to,
-          body: message,
-          thread_id,
-        }),
-      }),
+    async ({ from, to, message, thread_id }) => {
+      const result = sendMessage({
+        sender: from,
+        recipient: to,
+        body: message,
+        thread_id,
+      });
+      return result.ok
+        ? toolResult({ message: result.message })
+        : toolError(
+            `Agent ${to} is not active. Ask it to heartbeat before sending a message.`,
+            result,
+          );
+    },
   );
 
   server.registerTool(
@@ -273,6 +282,67 @@ export function createMailboxMcpServer(): McpServer {
       description: 'List known agent identities and their last heartbeat time.',
     },
     async () => toolResult({ agents: listAgents() }),
+  );
+
+  server.registerTool(
+    'list_channels',
+    {
+      description: 'List group-chat channels and their members.',
+    },
+    async () => toolResult({ channels: listChannels() }),
+  );
+
+  server.registerTool(
+    'create_channel',
+    {
+      description:
+        'Create a group-chat channel. Send to it with send_message using to="#<channel-id>".',
+      inputSchema: {
+        name: z.string().trim().min(1).max(200),
+        agent: z.string().trim().min(1).optional().describe('Creator; auto-joined as a member'),
+        members: z.array(z.string().trim().min(1)).optional(),
+      },
+    },
+    async ({ name, agent, members }) => {
+      const result = createChannel({ name, created_by: agent, members });
+      return result.ok
+        ? toolResult({ channel: result.channel })
+        : toolError(`Could not create channel: ${result.reason}.`, result);
+    },
+  );
+
+  server.registerTool(
+    'join_channel',
+    {
+      description: 'Join a group-chat channel so its messages reach your inbox.',
+      inputSchema: {
+        channel_id: z.string().trim().min(1),
+        agent: z.string().trim().min(1),
+      },
+    },
+    async ({ channel_id, agent }) => {
+      const channel = joinChannel(channel_id, agent);
+      return channel
+        ? toolResult({ channel })
+        : toolError(`Channel #${channel_id} was not found.`, { reason: 'not_found' });
+    },
+  );
+
+  server.registerTool(
+    'leave_channel',
+    {
+      description: 'Leave a group-chat channel.',
+      inputSchema: {
+        channel_id: z.string().trim().min(1),
+        agent: z.string().trim().min(1),
+      },
+    },
+    async ({ channel_id, agent }) => {
+      const channel = leaveChannel(channel_id, agent);
+      return channel
+        ? toolResult({ channel })
+        : toolError(`Channel #${channel_id} was not found.`, { reason: 'not_found' });
+    },
   );
 
   return server;

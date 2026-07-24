@@ -22,7 +22,23 @@ beforeAll(async () => {
 });
 
 describe('mailbox', () => {
+  it('removes expired agents before listing or addressing them', () => {
+    repo.heartbeat({ name: 'current' });
+    repo.heartbeat({ name: 'expired' });
+    database
+      .prepare(`UPDATE agents SET last_seen = ? WHERE id = ?`)
+      .run(Date.now() - repo.AGENT_TTL_MS - 1, 'expired');
+
+    expect(repo.listAgents().map(({ id }) => id)).toEqual(['current']);
+    expect(repo.sendMessage({ sender: 'human', recipient: 'expired', body: 'hello' })).toEqual({
+      ok: false,
+      reason: 'recipient_not_found',
+    });
+  });
+
   it('delivers messages only to the intended recipient and supports acknowledgement', () => {
+    repo.heartbeat({ name: 'alice' });
+    repo.heartbeat({ name: 'bob' });
     const message = repo.sendMessage({
       sender: 'alice',
       recipient: 'bob',
@@ -31,14 +47,18 @@ describe('mailbox', () => {
     });
 
     expect(repo.readInbox({ agent: 'alice' })).toEqual([]);
-    expect(repo.readInbox({ agent: 'bob' })).toEqual([message]);
-    expect(repo.acknowledgeMessage(message.id, 'alice')).toBeUndefined();
-    expect(repo.acknowledgeMessage(message.id, 'bob')?.acked_at).not.toBeNull();
+    expect(message).toMatchObject({ ok: true });
+    if (!message.ok) throw new Error('message was unexpectedly rejected');
+    expect(repo.readInbox({ agent: 'bob' })).toEqual([message.message]);
+    expect(repo.acknowledgeMessage(message.message.id, 'alice')).toBeUndefined();
+    expect(repo.acknowledgeMessage(message.message.id, 'bob')?.acked_at).not.toBeNull();
     expect(repo.readInbox({ agent: 'bob' })).toEqual([]);
     expect(repo.readInbox({ agent: 'bob', include_acknowledged: true })).toHaveLength(1);
   });
 
   it('lists the recent shared transcript chronologically with cursor pagination', () => {
+    repo.heartbeat({ name: 'bob' });
+    repo.heartbeat({ name: 'dave' });
     const first = repo.sendMessage({
       sender: 'alice',
       recipient: 'bob',
@@ -50,8 +70,11 @@ describe('mailbox', () => {
       body: 'Second message',
     });
 
-    expect(repo.listMessages({ after_id: first.id })).toEqual([second]);
-    expect(repo.listMessages({ limit: 1 })).toEqual([second]);
+    expect(first).toMatchObject({ ok: true });
+    expect(second).toMatchObject({ ok: true });
+    if (!first.ok || !second.ok) throw new Error('messages were unexpectedly rejected');
+    expect(repo.listMessages({ after_id: first.message.id })).toEqual([second.message]);
+    expect(repo.listMessages({ limit: 1 })).toEqual([second.message]);
   });
 
   it('exposes send, read, and acknowledge through MCP tools', async () => {
@@ -60,6 +83,11 @@ describe('mailbox', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     await client.connect(clientTransport);
+
+    await client.callTool({
+      name: 'heartbeat',
+      arguments: { agent: 'claude', kind: 'claude' },
+    });
 
     const sent = await client.callTool({
       name: 'send_message',
@@ -131,6 +159,108 @@ describe('mailbox', () => {
       reason: 'conflict',
       task: { claimed_by: 'alice' },
     });
+
+    await client.close();
+    await server.close();
+  });
+});
+
+describe('channels', () => {
+  it('fans a channel message out to every member inbox except the sender', () => {
+    const created = repo.createChannel({
+      name: 'General Chat',
+      created_by: 'grp-a',
+      members: ['grp-b', 'grp-c'],
+    });
+    expect(created).toMatchObject({ ok: true });
+    if (!created.ok) throw new Error('channel was unexpectedly rejected');
+    expect(created.channel.id).toBe('general-chat');
+    expect(created.channel.members.sort()).toEqual(['grp-a', 'grp-b', 'grp-c']);
+
+    const token = repo.channelRecipient(created.channel.id);
+    const sent = repo.sendMessage({ sender: 'grp-a', recipient: token, body: 'hello team' });
+    expect(sent).toMatchObject({ ok: true });
+
+    // The sender does not receive their own channel message; members do.
+    expect(repo.readInbox({ agent: 'grp-a' })).toEqual([]);
+    expect(repo.readInbox({ agent: 'grp-b' }).map((m) => m.body)).toEqual(['hello team']);
+    expect(repo.readInbox({ agent: 'grp-c' }).map((m) => m.body)).toEqual(['hello team']);
+  });
+
+  it('tracks acknowledgement per member so one ack does not hide it for others', () => {
+    const created = repo.createChannel({ name: 'standup', members: ['ack-b', 'ack-c'] });
+    if (!created.ok) throw new Error('channel was unexpectedly rejected');
+    const sent = repo.sendMessage({
+      sender: 'human',
+      recipient: repo.channelRecipient(created.channel.id),
+      body: 'daily sync',
+    });
+    if (!sent.ok) throw new Error('message was unexpectedly rejected');
+
+    expect(repo.acknowledgeMessage(sent.message.id, 'ack-b')).toMatchObject({ body: 'daily sync' });
+    expect(repo.readInbox({ agent: 'ack-b' })).toEqual([]);
+    // ack-c has not acked, so it is still pending for them.
+    expect(repo.readInbox({ agent: 'ack-c' }).map((m) => m.body)).toEqual(['daily sync']);
+    // A non-member cannot acknowledge the message.
+    expect(repo.acknowledgeMessage(sent.message.id, 'stranger')).toBeUndefined();
+  });
+
+  it('rejects messages to unknown channels and duplicate channel names', () => {
+    expect(repo.sendMessage({ sender: 'human', recipient: '#nope', body: 'x' })).toEqual({
+      ok: false,
+      reason: 'recipient_not_found',
+    });
+    expect(repo.createChannel({ name: 'Dup' })).toMatchObject({ ok: true });
+    expect(repo.createChannel({ name: 'dup' })).toEqual({ ok: false, reason: 'already_exists' });
+    expect(repo.createChannel({ name: '  ' })).toEqual({ ok: false, reason: 'invalid_name' });
+  });
+
+  it('reflects membership changes from join and leave', () => {
+    const created = repo.createChannel({ name: 'ops' });
+    if (!created.ok) throw new Error('channel was unexpectedly rejected');
+    const token = repo.channelRecipient(created.channel.id);
+
+    const before = repo.sendMessage({ sender: 'human', recipient: token, body: 'before join' });
+    if (!before.ok) throw new Error('message was unexpectedly rejected');
+    // Not a member yet, so the channel is invisible.
+    expect(repo.readInbox({ agent: 'ops-d' })).toEqual([]);
+
+    repo.joinChannel(created.channel.id, 'ops-d');
+    repo.sendMessage({ sender: 'human', recipient: token, body: 'after join' });
+    // Membership delivers channel messages; read past the pre-join message.
+    expect(
+      repo.readInbox({ agent: 'ops-d', after_id: before.message.id }).map((m) => m.body),
+    ).toEqual(['after join']);
+
+    repo.leaveChannel(created.channel.id, 'ops-d');
+    repo.sendMessage({ sender: 'human', recipient: token, body: 'after leave' });
+    // No longer a member, so channel messages stop reaching the inbox.
+    expect(repo.readInbox({ agent: 'ops-d', after_id: before.message.id })).toEqual([]);
+  });
+
+  it('creates, lists, and messages a channel through MCP tools', async () => {
+    const server = createMailboxMcpServer();
+    const client = new Client({ name: 'channel-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    await client.callTool({ name: 'heartbeat', arguments: { agent: 'zoe', kind: 'claude' } });
+    const created = await client.callTool({
+      name: 'create_channel',
+      arguments: { name: 'MCP Room', agent: 'zoe' },
+    });
+    const channel = (created.structuredContent as { channel: { id: string } }).channel;
+    const listed = await client.callTool({ name: 'list_channels', arguments: {} });
+    await client.callTool({
+      name: 'send_message',
+      arguments: { from: 'human', to: `#${channel.id}`, message: 'ping the room' },
+    });
+    const inbox = await client.callTool({ name: 'read_inbox', arguments: { agent: 'zoe' } });
+
+    expect(created.isError).not.toBe(true);
+    expect(JSON.stringify(listed.structuredContent)).toContain('mcp-room');
+    expect(JSON.stringify(inbox.structuredContent)).toContain('ping the room');
 
     await client.close();
     await server.close();

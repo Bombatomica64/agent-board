@@ -12,13 +12,17 @@ import { Router, json, type Request, type Response } from 'express';
 import {
   claimTask,
   commentTask,
+  createChannel,
   createTask,
   deleteTask,
   getTask,
   heartbeat,
+  joinChannel,
+  leaveChannel,
   listActivity,
   listAgents,
   listArchivedTasks,
+  listChannels,
   listRecentlyCompleted,
   listRepos,
   listTasks,
@@ -336,6 +340,66 @@ export function createApiRouter(): Router {
     res.status(201).json({ ok: true });
   });
 
+  // --- Channels -------------------------------------------------------------
+
+  /** List all group-chat channels with their membership. */
+  api.get('/channels', (_req, res) => {
+    res.json(listChannels());
+  });
+
+  /** Create a channel. `name` is required; `members` seeds initial membership. */
+  api.post('/channels', (req: Request, res: Response) => {
+    const name = String(req.body?.name ?? '').trim();
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const members = Array.isArray(req.body?.members)
+      ? req.body.members.map((m: unknown) => String(m))
+      : undefined;
+    const result = createChannel({
+      name,
+      created_by: req.body?.agent ? String(req.body.agent) : undefined,
+      members,
+    });
+    if (!result.ok) {
+      const status = result.reason === 'already_exists' ? 409 : 400;
+      res.status(status).json({ error: result.reason });
+      return;
+    }
+    res.status(201).json(result.channel);
+  });
+
+  /** Join a channel. */
+  api.post('/channels/:id/join', (req: Request, res: Response) => {
+    const agent = String(req.body?.agent ?? '').trim();
+    if (!agent) {
+      res.status(400).json({ error: 'agent is required' });
+      return;
+    }
+    const channel = joinChannel(String(req.params['id']), agent);
+    if (!channel) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.json(channel);
+  });
+
+  /** Leave a channel. */
+  api.post('/channels/:id/leave', (req: Request, res: Response) => {
+    const agent = String(req.body?.agent ?? '').trim();
+    if (!agent) {
+      res.status(400).json({ error: 'agent is required' });
+      return;
+    }
+    const channel = leaveChannel(String(req.params['id']), agent);
+    if (!channel) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.json(channel);
+  });
+
   // --- Messages -------------------------------------------------------------
 
   /** Read the public transcript of durable agent-to-agent messages. */
@@ -357,14 +421,17 @@ export function createApiRouter(): Router {
       res.status(400).json({ error: 'from, to, and message are required' });
       return;
     }
-    res.status(201).json(
-      sendMessage({
-        sender,
-        recipient,
-        body,
-        thread_id: req.body?.thread_id ? String(req.body.thread_id) : undefined,
-      }),
-    );
+    const result = sendMessage({
+      sender,
+      recipient,
+      body,
+      thread_id: req.body?.thread_id ? String(req.body.thread_id) : undefined,
+    });
+    if (!result.ok) {
+      res.status(404).json({ error: 'recipient is not an active agent or channel' });
+      return;
+    }
+    res.status(201).json(result.message);
   });
 
   return api;
