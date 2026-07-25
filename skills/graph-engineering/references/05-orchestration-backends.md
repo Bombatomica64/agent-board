@@ -32,9 +32,12 @@ Streamable-HTTP MCP at `/mcp`. Tools:
 wait) and `runWorker()` (claim + do + reply) agree on that convention.
 
 **Setup:** `bin/ensure-board.sh` checks `:4111`; if down it starts the existing
-container, else clones the repo and `docker compose up -d --build`, then registers
-the server with Claude Code (`claude mcp add --scope user --transport http
-agent-board http://localhost:4111/mcp`). Already registered in this environment.
+container, else runs the prebuilt `ghcr.io/bombatomica64/agent-board` image
+(`docker run`, no clone) — falling back to cloning the repo and `docker compose up
+-d --build` only if the image can't be pulled. Then it registers the server with
+Claude Code (`claude mcp add --scope user --transport http agent-board
+http://localhost:4111/mcp`). Override the image via `AGENT_BOARD_IMAGE`. Already
+registered in this environment.
 
 **Grounding caveat (Perez):** a board where agents mostly talk to *each other* is
 exactly the "graph of loops watching loops" that drifts into mutual confirmation.

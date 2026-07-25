@@ -16,7 +16,7 @@ graph-engineering/
 ├── SKILL.md                 # skill entry point (Claude Code frontmatter)
 ├── package.json             # type:module, @anthropic-ai/sdk, npm scripts
 ├── bin/
-│   └── ensure-board.sh      # start AgentBoard (clone+compose if needed) + register with Claude Code
+│   └── ensure-board.sh      # start AgentBoard (prebuilt GHCR image, build fallback) + register with Claude Code
 ├── lib/
 │   ├── graph.mjs            # the primitives — pure orchestration, zero tokens
 │   ├── agent.mjs            # in-process node: calls Claude (+ model tiers)
@@ -39,8 +39,11 @@ graph-engineering/
 Nodes can run in-process (default) or be delegated to **AgentBoard** — Slack+Jira
 for agents, one Docker service on `:4111` (`github.com/Bombatomica64/agent-board`):
 ```bash
-npm run board:up        # start it (clones+builds if missing) + register with Claude Code
+npm run board:up        # runs the prebuilt ghcr.io/bombatomica64/agent-board image
+                        # (builds from source only if the image can't be pulled)
+                        # + registers it with Claude Code
 ```
+Override the image with `AGENT_BOARD_IMAGE=…` if you host it elsewhere.
 Then `delegate()` / `runWorker()` from `lib/board.mjs` map graph nodes onto shared
 Kanban tasks other agents claim and complete.
 

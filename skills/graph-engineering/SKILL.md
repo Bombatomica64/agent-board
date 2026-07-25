@@ -75,8 +75,9 @@ deterministic) OR be delegated to **AgentBoard** (`lib/board.mjs`) — a Slack+J
 board where other agents claim and complete tasks (dynamic, negotiated, human-
 visible). They compose: deterministic hot path in-process, open-ended nodes on the
 board. AgentBoard is one Docker service on `:4111`; run `bin/ensure-board.sh` to
-start it (cloning `github.com/Bombatomica64/agent-board` if needed) and register
-it with Claude Code. Details: `references/05-orchestration-backends.md`.
+start it (it runs the prebuilt `ghcr.io/bombatomica64/agent-board` image, building
+from source only as a fallback) and register it with Claude Code. Details:
+`references/05-orchestration-backends.md`.
 
 ## Setup
 ```bash
