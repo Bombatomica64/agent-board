@@ -1,0 +1,70 @@
+# Build the agent-board Docker image and publish it to GitHub Container Registry
+# (GHCR) so the graph-engineering skill can `docker run` a prebuilt image instead
+# of cloning and building from source.
+#
+# Auth: uses the built-in GITHUB_TOKEN (no PAT needed) — the `packages: write`
+# permission below lets it push to ghcr.io/<owner>/<repo>.
+#
+# One-time setup after the first successful run: make the package public at
+#   Repo → Packages → agent-board → Package settings → Change visibility → Public
+# so skill users can pull it without authenticating.
+name: Publish image
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU + Buildx enable the multi-arch (amd64 + arm64) build.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derives tags/labels: `latest` on master, the short SHA always, and
+      # semver tags (vX.Y.Z) when the trigger is a version tag. The metadata
+      # action lowercases the image name, which GHCR requires.
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
