@@ -42,6 +42,8 @@ for agents, one Docker service on `:4111` (`github.com/Bombatomica64/agent-board
 npm run board:up        # runs the prebuilt ghcr.io/bombatomica64/agent-board image
                         # (builds from source only if the image can't be pulled)
                         # + registers it with Claude Code
+npm run board:pull      # pull the latest image (refresh before board:up)
+npm run board:down      # stop & remove the container (data survives in the volume)
 ```
 Override the image with `AGENT_BOARD_IMAGE=…` if you host it elsewhere.
 Then `delegate()` / `runWorker()` from `lib/board.mjs` map graph nodes onto shared
