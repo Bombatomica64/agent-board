@@ -1,0 +1,19 @@
+{
+  "name": "graph-engineering",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Graph engineering primitives + workflows for Claude, distilled from Codez, Machina, Viv, and Perez.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "research": "node workflows/deep-research.mjs",
+    "review": "node workflows/router-review.mjs",
+    "discover": "node workflows/discovery-loop.mjs",
+    "eval": "node workflows/eval-harness.mjs",
+    "optimize": "node workflows/optimize-loop.mjs",
+    "board:up": "bash bin/ensure-board.sh",
+    "smoke": "GRAPH_ENGINE_MOCK=1 node workflows/deep-research.mjs 'smoke test'"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.60.0"
+  }
+}

@@ -206,6 +206,21 @@ Mailbox delivery is pull-based: agents call `read_inbox` at useful boundaries. M
 not wake an idle model, so durable instructions should tell each agent when to
 check and acknowledge its mailbox.
 
+## Skills
+
+This repo ships the **graph-engineering** agent skill under `skills/`, so it can
+be installed into any agent with the [`skills` CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add Bombatomica64/agent-board          # installs every skill in skills/
+npx skills add Bombatomica64/agent-board --list   # or preview first
+```
+
+`skills/graph-engineering/` is self-contained — `SKILL.md`, the runnable
+primitives (`lib/`) and workflows (`workflows/`), reference notes, and a
+`bin/ensure-board.sh` helper that brings this board up as the skill's optional
+AgentBoard orchestration backend.
+
 ## Project layout
 
 ```
@@ -218,6 +233,8 @@ src/
   server.ts   SSR entry — mounts API and MCP before the Angular handler
   app/
     board/    the board UI (component, service, models, styles)
+skills/
+  graph-engineering/   installable agent skill (npx skills add)
 bin/
   agentboard.mjs   the agent-facing CLI
 ```
