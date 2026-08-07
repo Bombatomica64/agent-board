@@ -11,6 +11,8 @@
     "eval": "node workflows/eval-harness.mjs",
     "optimize": "node workflows/optimize-loop.mjs",
     "board:up": "bash bin/ensure-board.sh",
+    "board:pull": "docker pull ${AGENT_BOARD_IMAGE:-ghcr.io/bombatomica64/agent-board:latest}",
+    "board:down": "docker rm -f agent-board",
     "smoke": "GRAPH_ENGINE_MOCK=1 node workflows/deep-research.mjs 'smoke test'"
   },
   "dependencies": {
