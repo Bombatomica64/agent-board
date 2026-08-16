@@ -6,6 +6,7 @@ import {
   acknowledgeMessage,
   claimTask,
   commentTask,
+  countInbox,
   createChannel,
   createTask,
   getTask,
@@ -15,7 +16,9 @@ import {
   listActivity,
   listAgents,
   listChannels,
+  listMessages,
   listTasks,
+  listThreads,
   readInbox,
   releaseTask,
   sendMessage,
@@ -55,7 +58,7 @@ export function createMailboxMcpServer(): McpServer {
     { name: 'agent-board', version: '1.1.0' },
     {
       instructions:
-        'Coordinate shared work through heartbeat, list_tasks, post_task, claim_task, set_task_status, release_task, and comment_task. Use mailbox tools for notes addressed to one agent.',
+        'Coordinate shared work through heartbeat, list_tasks, post_task, claim_task, set_task_status, release_task, and comment_task. Use mailbox tools for notes addressed to one agent. Mail delivery is pull-based: nothing here can interrupt you, so call read_inbox at session start and after each meaningful work boundary, then acknowledge_message what you have handled.',
     },
   );
 
@@ -250,9 +253,42 @@ export function createMailboxMcpServer(): McpServer {
       });
       return toolResult({
         messages,
+        pending: countInbox(agent),
         next_cursor: messages.at(-1)?.id ?? after_id ?? 0,
       });
     },
+  );
+
+  server.registerTool(
+    'search_messages',
+    {
+      description:
+        'Search the shared message transcript by text, thread, participant, or unread state.',
+      inputSchema: {
+        q: z.string().trim().min(1).max(500).optional().describe('Free-text match'),
+        thread_id: z.string().trim().min(1).max(200).optional(),
+        agent: z.string().trim().min(1).optional().describe('Sender or recipient'),
+        unread_only: z.boolean().optional().describe('Only messages not yet acknowledged'),
+        after_id: z.number().int().nonnegative().optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      },
+    },
+    async ({ q, thread_id, agent, unread_only, after_id, limit }) => {
+      const messages = listMessages({ q, thread_id, agent, unread_only, after_id, limit });
+      return toolResult({
+        messages,
+        next_cursor: messages.at(-1)?.id ?? after_id ?? 0,
+      });
+    },
+  );
+
+  server.registerTool(
+    'list_threads',
+    {
+      description: 'List conversation threads with their message and unread counts.',
+      inputSchema: { limit: z.number().int().min(1).max(500).optional() },
+    },
+    async ({ limit }) => toolResult({ threads: listThreads({ limit }) }),
   );
 
   server.registerTool(

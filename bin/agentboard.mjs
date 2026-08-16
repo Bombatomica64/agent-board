@@ -74,6 +74,29 @@ function taskLine(t) {
   return `#${String(t.id).padEnd(3)} [${t.status.padEnd(11)}] ${t.repo}: ${t.title} ${owner}${prio}`;
 }
 
+/** Render one mailbox message as a compact one-liner. */
+function messageLine(m) {
+  const when = new Date(m.created_at).toLocaleTimeString();
+  const thread = m.thread_id ? ` [${m.thread_id}]` : '';
+  const state = m.unread ? '•' : ' ';
+  return `${state} #${String(m.id).padEnd(4)} ${when}  ${m.sender} → ${m.recipient}${thread}: ${m.body}`;
+}
+
+/** Print an `/api/inbox` payload, including how to acknowledge each message. */
+function printInbox(payload) {
+  const messages = payload?.messages ?? [];
+  if (messages.length === 0) {
+    console.log('(inbox empty)');
+    return;
+  }
+  for (const m of messages) console.log(messageLine(m));
+  console.log(`\n${payload.pending} pending — acknowledge with: agentboard ack <message-id>`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function die(msg, code = 1) {
   console.error(msg);
   process.exit(code);
@@ -101,6 +124,16 @@ Commands:
   activity [--repo R] [--limit N]           recent activity feed
   heartbeat                                 announce presence (refresh last-seen)
   repos                                     list known repos
+
+Mailbox (pull-based — nothing wakes an idle agent; poll at your own boundaries):
+  inbox [--all] [--limit N] [--json]        read your pending messages
+        [--watch] [--interval SEC]          keep polling instead of exiting
+  send <to> "<message>" [--thread T]        message an agent, or "#channel"
+  ack <message-id>                          mark one message handled
+  messages [--q TEXT] [--thread T]          search the shared transcript
+           [--agent A] [--unread] [--limit N]
+  threads                                   conversation threads + unread counts
+  unread                                    pending counts per recipient
 `;
 
 async function main() {
@@ -246,6 +279,103 @@ async function main() {
         const t = new Date(e.created_at).toLocaleTimeString();
         console.log(`${t}  ${e.agent || '-'}  ${e.kind}  #${e.task_id ?? '-'}  ${e.message}`);
       }
+      return;
+    }
+
+    case 'inbox': {
+      const params = new URLSearchParams({ agent: NAME });
+      if (flags.all) params.set('include_acknowledged', '1');
+      if (flags.limit) params.set('limit', String(flags.limit));
+      if (!flags.watch) {
+        const { status, body } = await api('GET', `/api/inbox?${params}`);
+        if (status >= 400) die(`error: ${JSON.stringify(body)}`);
+        if (flags.json) {
+          console.log(JSON.stringify(body, null, 2));
+          return;
+        }
+        printInbox(body);
+        return;
+      }
+      // --watch: poll forever, printing only messages we have not shown yet.
+      // Delivery stays pull-based; this is just a convenient poller for
+      // harnesses (and humans) that want a live tail of the mailbox.
+      const seconds = Math.max(Number(flags.interval) || 15, 2);
+      let cursor = 0;
+      for (;;) {
+        params.set('after_id', String(cursor));
+        const { status, body } = await api('GET', `/api/inbox?${params}`);
+        if (status >= 400) die(`error: ${JSON.stringify(body)}`);
+        if (body.messages?.length) {
+          if (flags.json) console.log(JSON.stringify(body.messages));
+          else printInbox(body);
+          cursor = body.next_cursor ?? cursor;
+        }
+        await sleep(seconds * 1000);
+      }
+    }
+
+    case 'send': {
+      const to = positional[0];
+      const message = positional[1];
+      if (!to || !message) die('usage: agentboard send <to> "<message>" [--thread T]');
+      const { status, body } = await api('POST', '/api/messages', {
+        from: NAME,
+        to,
+        message,
+        thread_id: flags.thread ? String(flags.thread) : undefined,
+      });
+      if (status >= 400) die(`error: ${JSON.stringify(body)}`);
+      console.log(`sent #${body.id} to ${body.recipient}`);
+      return;
+    }
+
+    case 'ack': {
+      const id = positional[0];
+      if (!id) die('usage: agentboard ack <message-id>');
+      const { status, body } = await api('POST', `/api/messages/${id}/ack`, { agent: NAME });
+      if (status >= 400) die(`error: ${JSON.stringify(body)}`);
+      console.log(`acknowledged #${body.id}`);
+      return;
+    }
+
+    case 'messages': {
+      const params = new URLSearchParams();
+      if (flags.q) params.set('q', String(flags.q));
+      if (flags.thread) params.set('thread_id', String(flags.thread));
+      if (flags.agent) params.set('agent', String(flags.agent));
+      if (flags.unread) params.set('unread', '1');
+      params.set('limit', String(flags.limit || 50));
+      const { status, body } = await api('GET', `/api/messages?${params}`);
+      if (status >= 400) die(`error: ${JSON.stringify(body)}`);
+      if (!Array.isArray(body) || body.length === 0) {
+        console.log('(no messages)');
+        return;
+      }
+      for (const m of body) console.log(messageLine(m));
+      return;
+    }
+
+    case 'threads': {
+      const { body } = await api('GET', '/api/messages/threads');
+      if (!Array.isArray(body) || body.length === 0) {
+        console.log('(no threads)');
+        return;
+      }
+      for (const t of body) {
+        console.log(
+          `${t.thread_id.padEnd(24)} ${t.messages} messages, ${t.unread} unread, last ${new Date(t.last_at).toLocaleString()}`,
+        );
+      }
+      return;
+    }
+
+    case 'unread': {
+      const { body } = await api('GET', '/api/messages/unread-counts');
+      if (!Array.isArray(body) || body.length === 0) {
+        console.log('(nothing pending)');
+        return;
+      }
+      for (const row of body) console.log(`${String(row.unread).padStart(4)}  ${row.recipient}`);
       return;
     }
 

@@ -1,21 +1,31 @@
 #!/usr/bin/env node
 /**
- * Claude Code `UserPromptSubmit` hook for agent-board.
+ * Claude Code `UserPromptSubmit` / `SessionStart` hook for agent-board.
  *
- * Runs every time you send a message in a Claude Code session. It:
- *   1. heartbeats this agent (refreshes presence on the board), and
+ * Runs at the two boundaries Claude Code gives us — session start, and every
+ * message you send. At each one it:
+ *   1. heartbeats this agent (refreshes presence on the board),
  *   2. logs a short note of what you asked, tagged with the current repo,
- *      so other agents can see what this session is working on.
+ *      so other agents can see what this session is working on, and
+ *   3. polls this agent's mailbox and prints anything pending, which Claude
+ *      Code injects into the session context.
  *
- * It is intentionally silent and non-blocking: it prints nothing to stdout
- * (so nothing is injected into Claude's context), swallows all errors, and
- * never fails the prompt. Wire it up in ~/.claude/settings.json under
- * hooks.UserPromptSubmit.
+ * Step 3 is the whole delivery story: mail is pull-based, so nothing can wake
+ * an idle session. This hook turns each prompt boundary into a poll, which is
+ * the closest thing to delivery a running session gets. Messages are printed,
+ * not acknowledged — Claude acknowledges once it has actually handled them.
+ *
+ * The hook stays non-blocking: it swallows all errors, bounds every request
+ * with a short timeout, and never fails the prompt. Set
+ * `AGENT_BOARD_HOOK_QUIET=1` to suppress the mailbox output entirely and keep
+ * the original silent reporting behaviour. Wire it up in
+ * ~/.claude/settings.json under hooks.UserPromptSubmit and hooks.SessionStart.
  *
  * Configuration (environment):
- *   AGENT_BOARD_URL   board base URL (default http://localhost:4111)
- *   AGENT_BOARD_NAME  fixed identity; otherwise derived per session
- *   AGENT_BOARD_KIND  claude | codex | other (default claude)
+ *   AGENT_BOARD_URL        board base URL (default http://localhost:4111)
+ *   AGENT_BOARD_NAME       fixed identity; otherwise derived per session
+ *   AGENT_BOARD_KIND       claude | codex | other (default claude)
+ *   AGENT_BOARD_HOOK_QUIET 1 to never print pending mail into the context
  */
 import { basename } from 'node:path';
 import { hostname } from 'node:os';
@@ -38,22 +48,28 @@ async function readStdin() {
   }
 }
 
-/** Best-effort POST; never throws, bounded by a short timeout. */
-async function post(path, body) {
+/** Best-effort request; never throws, bounded by a short timeout. */
+async function request(method, path, body) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    await fetch(`${BASE}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
-    clearTimeout(timer);
+    return res.ok ? await res.json() : null;
   } catch {
     // Board may be down; a message hook must never disrupt the session.
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
+
+const post = (path, body) => request('POST', path, body);
+const get = (path) => request('GET', path);
 
 /** Derive a stable-per-session identity when AGENT_BOARD_NAME isn't set. */
 function identity(payload) {
@@ -75,21 +91,48 @@ function summarize(payload) {
   return prompt.length > MAX_MESSAGE ? `${prompt.slice(0, MAX_MESSAGE - 1)}…` : prompt;
 }
 
+/**
+ * Render pending mail as the context block Claude Code injects. Returns an
+ * empty string when there is nothing to report.
+ */
+function renderInbox(inbox, agent) {
+  const messages = inbox?.messages ?? [];
+  if (messages.length === 0) return '';
+  const lines = messages.map((m) => {
+    const thread = m.thread_id ? ` [thread ${m.thread_id}]` : '';
+    return `- #${m.id} from ${m.sender}${thread}: ${m.body}`;
+  });
+  const extra = inbox.pending > messages.length ? ` (${inbox.pending} pending in total)` : '';
+  return [
+    `[agent-board] ${messages.length} unread message(s) for ${agent}${extra}:`,
+    ...lines,
+    'Acknowledge each one you have handled with the acknowledge_message MCP tool, ' +
+      `or: agentboard ack <id> (as ${agent}).`,
+  ].join('\n');
+}
+
 async function main() {
   const payload = await readStdin();
   const agent = identity(payload);
   const repo = repoOf(payload);
+  const isPrompt = String(payload.hook_event_name || 'UserPromptSubmit') === 'UserPromptSubmit';
 
-  await Promise.all([
-    post('/api/agents/heartbeat', { name: agent, kind: KIND, host: hostname() }),
-    post('/api/activity', {
-      agent,
-      repo,
-      kind: 'prompt',
-      message: summarize(payload),
-    }),
+  // Heartbeat first so the identity exists before anyone tries to address it;
+  // the note only makes sense for an actual prompt.
+  await post('/api/agents/heartbeat', { name: agent, kind: KIND, host: hostname() });
+  const [, inbox] = await Promise.all([
+    isPrompt
+      ? post('/api/activity', { agent, repo, kind: 'prompt', message: summarize(payload) })
+      : Promise.resolve(null),
+    process.env.AGENT_BOARD_HOOK_QUIET === '1'
+      ? Promise.resolve(null)
+      : get(`/api/inbox?agent=${encodeURIComponent(agent)}&limit=10`),
   ]);
-  // Print nothing: no context injected, exit 0.
+
+  // Anything printed here becomes session context; staying silent when the
+  // mailbox is empty keeps the hook invisible in the common case.
+  const block = renderInbox(inbox, agent);
+  if (block) process.stdout.write(`${block}\n`);
 }
 
 main().catch(() => process.exit(0));

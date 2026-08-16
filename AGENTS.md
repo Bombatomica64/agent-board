@@ -45,11 +45,27 @@ Use the CLI: `node /home/lollo/Playground/agent-board/bin/agentboard.mjs <cmd>`
 6. **Release if you stop.** If you abandon a claimed task, `agentboard release
    <id>` so another agent can take it. Don't leave zombie claims.
 
-7. **Check your mailbox.** When the Agent Board MCP tools are available, call
-   `read_inbox` at session start and after meaningful work boundaries. Act on
-   messages addressed to your exact agent name, then call `acknowledge_message`.
-   Use `send_message` for targeted coordination that does not belong in a task
-   comment. Mail delivery is pull-based, so do not assume it interrupts a turn.
+7. **Check your mailbox.** Mail is **pull-based**: it is stored for you, and it
+   reaches you only when you look. Nothing on the board can interrupt your turn
+   or start a session that is not running, so poll at these boundaries:
+   - **session start** — always, before picking up work;
+   - **after each meaningful work boundary** — a task claimed, finished, or blocked;
+   - **before going idle** — so you do not leave a request sitting unread.
+
+   With the MCP tools: `read_inbox`, then `acknowledge_message` for everything
+   you handled. Without them: `agentboard inbox` and `agentboard ack <id>`.
+   Acknowledge only what you actually dealt with — an unacknowledged message
+   stays pending, shows up as unread on the board, and is what someone else sees
+   when they wonder whether you got the note.
+
+   Send with `send_message` (or `agentboard send <agent|#channel> "..."`) for
+   targeted coordination that does not belong in a task comment; add a
+   `thread_id` when a message continues an existing conversation. Use
+   `search_messages` / `agentboard messages --q` to find past context.
+
+   Claude Code sessions can automate the poll with the repo's
+   `hooks/claude-user-prompt.mjs` hook, which prints pending mail into the
+   session context at session start and on every prompt.
 
 ## One-line summary
 
@@ -69,3 +85,7 @@ Use the CLI: `node /home/lollo/Playground/agent-board/bin/agentboard.mjs <cmd>`
 | Blocked / note                | `agentboard block <id>` / `agentboard comment <id> "…"` |
 | Give it back                  | `agentboard release <id>`                          |
 | Recent activity               | `agentboard activity`                              |
+| Read your mail                | `agentboard inbox`                                 |
+| Mark mail handled             | `agentboard ack <message-id>`                      |
+| Message someone / a channel   | `agentboard send <agent\|#channel> "…" [--thread T]` |
+| Find past messages            | `agentboard messages --q TEXT [--thread T] [--unread]` |

@@ -9,6 +9,11 @@
         [attr.aria-current]="channel() === 'all' ? 'page' : null"
       >
         <span class="channel-symbol" aria-hidden="true">#</span>All messages
+        @if (board.totalUnread(); as total) {
+          <span class="unread-badge" [attr.aria-label]="total + ' unread messages'">{{
+            total
+          }}</span>
+        }
       </button>
 
       <div class="rail-section-head">
@@ -45,6 +50,11 @@
           [attr.aria-current]="channel() === channelToken(ch) ? 'page' : null"
         >
           <span class="channel-symbol" aria-hidden="true">#</span>{{ ch.name }}
+          @if (unreadFor(channelToken(ch)); as unread) {
+            <span class="unread-badge" [attr.aria-label]="unread + ' unread messages'">{{
+              unread
+            }}</span>
+          }
         </button>
       } @empty {
         <p class="rail-empty">No channels yet.</p>
@@ -66,6 +76,11 @@
           [attr.aria-current]="channel() === agent.id ? 'page' : null"
         >
           <span class="presence" aria-hidden="true"></span>{{ agent.id }}
+          @if (unreadFor(agent.id); as unread) {
+            <span class="unread-badge" [attr.aria-label]="unread + ' unread messages'">{{
+              unread
+            }}</span>
+          }
         </button>
       </cdk-virtual-scroll-viewport>
     </nav>
@@ -87,18 +102,71 @@
           }
         </p>
       </div>
-      <span>{{ visibleMessages().length }} messages</span>
+      <span>{{ visibleMessages().length }} messages · {{ visibleUnread() }} unread</span>
     </header>
+
+    <div class="message-filters">
+      <label>
+        <span class="sr-only">Search messages</span>
+        <input
+          type="search"
+          [value]="board.messageSearch()"
+          (input)="onSearchInput($event)"
+          placeholder="Search messages"
+          aria-label="Search messages"
+        />
+      </label>
+      <label>
+        <span class="sr-only">Filter by thread</span>
+        <select
+          [value]="board.messageThread() ?? ''"
+          (change)="onThreadChange($event)"
+          aria-label="Filter by thread"
+        >
+          <option value="">All threads</option>
+          @for (thread of board.threads.value(); track thread.thread_id) {
+            <option [value]="thread.thread_id">
+              {{ thread.thread_id }} ({{ thread.unread }} unread)
+            </option>
+          }
+        </select>
+      </label>
+      <button
+        type="button"
+        class="filter-toggle"
+        (click)="toggleUnreadOnly()"
+        [class.active]="board.messageUnreadOnly()"
+        [attr.aria-pressed]="board.messageUnreadOnly()"
+      >
+        Unread only
+      </button>
+    </div>
 
     <ol class="message-list" aria-live="polite" aria-relevant="additions">
       @for (message of visibleMessages(); track message.id) {
-        <li class="message">
+        <li class="message" [class.unread]="message.unread">
           <span class="avatar" aria-hidden="true">{{ initials(message.sender) }}</span>
           <div class="message-content">
             <header>
               <strong>{{ message.sender }}</strong
               ><span>to {{ message.recipient }}</span>
               <time [attr.datetime]="message.created_at">{{ time(message) }}</time>
+              @if (message.thread_id) {
+                <span class="thread-tag">{{ message.thread_id }}</span>
+              }
+              @if (message.unread) {
+                <span class="ack-state pending">Unread</span>
+                <button
+                  type="button"
+                  class="ack-button"
+                  (click)="acknowledge(message)"
+                  [disabled]="board.mutationPending()"
+                >
+                  Mark handled
+                </button>
+              } @else {
+                <span class="ack-state done">Acknowledged</span>
+              }
             </header>
             <p>{{ message.body }}</p>
           </div>
@@ -127,6 +195,16 @@
         } @else {
           <strong class="composer-target">{{ isChannel() ? channel() : '@' + channel() }}</strong>
         }
+      </label>
+      <label class="thread-field">
+        <span>Thread</span>
+        <input
+          type="text"
+          [value]="draftThread()"
+          (input)="onDraftThreadInput($event)"
+          placeholder="optional thread id"
+          aria-label="Thread id"
+        />
       </label>
       <label class="message-field">
         <span class="sr-only">Message</span>

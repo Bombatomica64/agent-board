@@ -10,8 +10,10 @@
  */
 import { Router, json, type Request, type Response } from 'express';
 import {
+  acknowledgeMessage,
   claimTask,
   commentTask,
+  countInbox,
   createChannel,
   createTask,
   deleteTask,
@@ -27,10 +29,14 @@ import {
   listRepos,
   listTasks,
   listMessages,
+  listThreads,
+  pruneMessages,
+  readInbox,
   recordNote,
   releaseTask,
   setStatus,
   sendMessage,
+  unreadCounts,
   updateTask,
   type AgentKind,
   type TaskStatus,
@@ -45,6 +51,13 @@ const STATUSES: readonly TaskStatus[] = [
   'done',
   'abandoned',
 ];
+
+/** Read a query-string boolean (`1`, `true`, or a bare flag) as a boolean. */
+function isTruthy(raw: unknown): boolean {
+  if (raw === undefined || raw === null) return false;
+  const value = String(raw).trim().toLowerCase();
+  return value === '' || value === '1' || value === 'true' || value === 'yes';
+}
 
 /** Parse a route `:id` param into a positive integer, or `null` if invalid. */
 function parseId(raw: string): number | null {
@@ -402,14 +415,41 @@ export function createApiRouter(): Router {
 
   // --- Messages -------------------------------------------------------------
 
-  /** Read the public transcript of durable agent-to-agent messages. */
+  /**
+   * Read the public transcript of durable agent-to-agent messages, optionally
+   * filtered by free text (`q`), `thread_id`, participant (`agent`), or
+   * `unread=1` for messages still awaiting acknowledgement.
+   */
   api.get('/messages', (req: Request, res: Response) => {
     res.json(
       listMessages({
         after_id: req.query['after_id'] ? Number(req.query['after_id']) : undefined,
         limit: req.query['limit'] ? Number(req.query['limit']) : undefined,
+        q: req.query['q'] ? String(req.query['q']) : undefined,
+        thread_id: req.query['thread_id'] ? String(req.query['thread_id']) : undefined,
+        agent: req.query['agent'] ? String(req.query['agent']) : undefined,
+        unread_only: isTruthy(req.query['unread']),
       }),
     );
+  });
+
+  /** Conversation threads with message and unread counts, for filter UIs. */
+  api.get('/messages/threads', (req: Request, res: Response) => {
+    res.json(listThreads({ limit: req.query['limit'] ? Number(req.query['limit']) : undefined }));
+  });
+
+  /** Pending message counts per recipient token, for unread badges. */
+  api.get('/messages/unread-counts', (_req, res) => {
+    res.json(unreadCounts());
+  });
+
+  /**
+   * Run one bounded retention sweep. Retention also runs opportunistically on
+   * every send; this endpoint exists for cron jobs and operational cleanup.
+   */
+  api.post('/messages/prune', (req: Request, res: Response) => {
+    const limit = Number.isFinite(req.body?.limit) ? Number(req.body.limit) : undefined;
+    res.json({ deleted: pruneMessages({ limit }) });
   });
 
   /** Send a durable direct message from the human chat interface. */
@@ -432,6 +472,50 @@ export function createApiRouter(): Router {
       return;
     }
     res.status(201).json(result.message);
+  });
+
+  /**
+   * Read one agent's pending mailbox. This is the pull-based delivery path used
+   * by non-MCP harnesses (the `agentboard` CLI, hooks, plain `curl`).
+   */
+  api.get('/inbox', (req: Request, res: Response) => {
+    const agent = String(req.query['agent'] ?? '').trim();
+    if (!agent) {
+      res.status(400).json({ error: 'agent is required' });
+      return;
+    }
+    const messages = readInbox({
+      agent,
+      after_id: req.query['after_id'] ? Number(req.query['after_id']) : undefined,
+      limit: req.query['limit'] ? Number(req.query['limit']) : undefined,
+      include_acknowledged: isTruthy(req.query['include_acknowledged']),
+    });
+    res.json({
+      agent,
+      messages,
+      pending: countInbox(agent),
+      next_cursor: messages.at(-1)?.id ?? Number(req.query['after_id'] ?? 0),
+    });
+  });
+
+  /** Acknowledge one received message, removing it from that agent's inbox. */
+  api.post('/messages/:id/ack', (req: Request, res: Response) => {
+    const id = parseId(String(req.params['id']));
+    if (id === null) {
+      res.status(400).json({ error: 'invalid id' });
+      return;
+    }
+    const agent = String(req.body?.agent ?? '').trim();
+    if (!agent) {
+      res.status(400).json({ error: 'agent is required' });
+      return;
+    }
+    const message = acknowledgeMessage(id, agent);
+    if (!message) {
+      res.status(404).json({ error: 'no such message for this agent' });
+      return;
+    }
+    res.json(message);
   });
 
   return api;
