@@ -19,6 +19,7 @@ export class Chat {
   /** Recipient picked from the dropdown while viewing the shared transcript. */
   protected readonly recipient = signal('');
   protected readonly draft = signal('');
+  protected readonly draftThread = signal('');
   protected readonly newChannelName = signal('');
   protected readonly composingChannel = signal(false);
 
@@ -52,6 +53,11 @@ export class Chat {
     return this.recipient() || this.board.agents.value()[0]?.id || '';
   });
 
+  /** Messages in view that nobody has acknowledged yet. */
+  protected readonly visibleUnread = computed(
+    () => this.visibleMessages().filter((message) => message.unread).length,
+  );
+
   protected selectChannel(token: string): void {
     this.channel.set(token);
   }
@@ -64,12 +70,53 @@ export class Chat {
     this.draft.set((event.target as HTMLTextAreaElement).value);
   }
 
+  protected onDraftThreadInput(event: Event): void {
+    this.draftThread.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onSearchInput(event: Event): void {
+    this.board.messageSearch.set((event.target as HTMLInputElement).value);
+  }
+
+  protected onThreadChange(event: Event): void {
+    const value = (event.target as HTMLSelectElement).value;
+    this.board.messageThread.set(value || null);
+  }
+
+  protected toggleUnreadOnly(): void {
+    this.board.messageUnreadOnly.set(!this.board.messageUnreadOnly());
+  }
+
+  /** Pending messages addressed to one conversation, for the rail badges. */
+  protected unreadFor(token: string): number {
+    return this.board.unreadFor(token);
+  }
+
+  /**
+   * Acknowledge a message as the current identity. The server decides whether
+   * this identity may ack it (recipient for a DM, member for a channel), so a
+   * rejected ack surfaces as the usual board error.
+   */
+  protected async acknowledge(message: MailMessage): Promise<void> {
+    if (this.board.mutationPending()) return;
+    try {
+      await this.board.acknowledgeMessage(message.id, this.identity().trim() || 'human');
+    } catch {
+      // BoardService exposes the actionable error above the workspace.
+    }
+  }
+
   protected async send(): Promise<void> {
     const message = this.draft().trim();
     const target = this.composerTarget();
     if (!message || !target || this.board.mutationPending()) return;
     try {
-      await this.board.sendMessage(this.identity().trim() || 'human', target, message);
+      await this.board.sendMessage(
+        this.identity().trim() || 'human',
+        target,
+        message,
+        this.draftThread(),
+      );
       this.draft.set('');
       this.channel.set(target);
     } catch {

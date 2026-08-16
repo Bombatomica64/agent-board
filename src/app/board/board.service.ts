@@ -11,7 +11,15 @@ import { isPlatformBrowser } from '@angular/common';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { httpResource } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import type { Agent, Channel, MailMessage, Task, TaskStatus } from './models';
+import type {
+  Agent,
+  Channel,
+  MailMessage,
+  MessageThread,
+  Task,
+  TaskStatus,
+  UnreadCount,
+} from './models';
 
 /** How often (ms) the browser re-polls the board for other agents' changes. */
 const POLL_INTERVAL_MS = 4000;
@@ -54,9 +62,48 @@ export class BoardService {
     defaultValue: [],
   });
 
-  readonly messages = httpResource<MailMessage[]>(() => `/api/messages?limit=200`, {
+  /** Mailbox filters, applied server-side so counts stay honest. */
+  readonly messageSearch = signal('');
+  readonly messageThread = signal<string | null>(null);
+  readonly messageUnreadOnly = signal(false);
+
+  readonly messages = httpResource<MailMessage[]>(
+    () => {
+      const params = new URLSearchParams({ limit: '200' });
+      const q = this.messageSearch().trim();
+      const thread = this.messageThread();
+      if (q) params.set('q', q);
+      if (thread) params.set('thread_id', thread);
+      if (this.messageUnreadOnly()) params.set('unread', '1');
+      return `/api/messages?${params.toString()}`;
+    },
+    { defaultValue: [] },
+  );
+
+  /** Pending message counts per recipient token, for the rail's unread badges. */
+  readonly unreadCounts = httpResource<UnreadCount[]>(() => `/api/messages/unread-counts`, {
     defaultValue: [],
   });
+
+  /** Conversation threads, for the thread filter. */
+  readonly threads = httpResource<MessageThread[]>(() => `/api/messages/threads`, {
+    defaultValue: [],
+  });
+
+  /** Unread count keyed by recipient token (agent id or `#channel`). */
+  private readonly unreadByRecipient = computed(
+    () => new Map(this.unreadCounts.value().map((row) => [row.recipient, row.unread])),
+  );
+
+  /** Pending messages addressed to one recipient token; `0` when all caught up. */
+  unreadFor(recipient: string): number {
+    return this.unreadByRecipient().get(recipient) ?? 0;
+  }
+
+  /** Total pending messages across every recipient. */
+  readonly totalUnread = computed(() =>
+    this.unreadCounts.value().reduce((sum, row) => sum + row.unread, 0),
+  );
 
   /** Every group-chat channel with its membership. */
   readonly channels = httpResource<Channel[]>(() => `/api/channels`, {
@@ -103,6 +150,8 @@ export class BoardService {
     this.repos.reload();
     this.messages.reload();
     this.channels.reload();
+    this.unreadCounts.reload();
+    this.threads.reload();
   }
 
   /** Create a new task, then refresh. */
@@ -155,8 +204,22 @@ export class BoardService {
     await this.runMutation(firstValueFrom(this.http.delete(`/api/tasks/${id}`)));
   }
 
-  async sendMessage(from: string, to: string, message: string): Promise<void> {
-    await this.runMutation(firstValueFrom(this.http.post('/api/messages', { from, to, message })));
+  async sendMessage(from: string, to: string, message: string, thread?: string): Promise<void> {
+    await this.runMutation(
+      firstValueFrom(
+        this.http.post('/api/messages', {
+          from,
+          to,
+          message,
+          thread_id: thread?.trim() || undefined,
+        }),
+      ),
+    );
+  }
+
+  /** Acknowledge one message as `agent`, clearing it from that agent's inbox. */
+  async acknowledgeMessage(id: number, agent: string): Promise<void> {
+    await this.runMutation(firstValueFrom(this.http.post(`/api/messages/${id}/ack`, { agent })));
   }
 
   /** Create a group-chat channel, seeded with `members`, then refresh. */

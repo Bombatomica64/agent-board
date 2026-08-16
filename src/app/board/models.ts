@@ -43,6 +43,25 @@ export interface MailMessage {
   thread_id: string | null;
   created_at: number;
   acked_at: number | null;
+  /**
+   * True while the message still awaits acknowledgement — for a direct message
+   * from its recipient, for a channel message from every member but the sender.
+   */
+  unread: boolean;
+}
+
+/** One conversation thread, summarised for the thread filter. */
+export interface MessageThread {
+  thread_id: string;
+  messages: number;
+  unread: number;
+  last_at: number;
+}
+
+/** Pending message count for one recipient token (agent id or `#channel`). */
+export interface UnreadCount {
+  recipient: string;
+  unread: number;
 }
 
 /** A group-chat channel. Messages sent to it fan out to every member's inbox. */

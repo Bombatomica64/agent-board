@@ -58,6 +58,26 @@ export interface MailMessage {
   thread_id: string | null;
   created_at: number;
   acked_at: number | null;
+  /**
+   * True while the message still awaits acknowledgement. A direct message is
+   * unread until its recipient acks it; a channel message is unread while any
+   * current member other than the sender has not acked it.
+   */
+  unread: boolean;
+}
+
+/** One conversation thread, summarised for filter UIs. */
+export interface MessageThread {
+  thread_id: string;
+  messages: number;
+  unread: number;
+  last_at: number;
+}
+
+/** Pending messages per recipient token (agent id or `#channel`). */
+export interface UnreadCount {
+  recipient: string;
+  unread: number;
 }
 
 export type SendMessageResult =
@@ -112,6 +132,28 @@ function configuredDuration(name: string, fallback: number): number {
 
 /** How long an agent remains addressable after its last heartbeat. */
 export const AGENT_TTL_MS = configuredDuration('AGENT_BOARD_AGENT_TTL_MS', DEFAULT_AGENT_TTL_MS);
+
+const DEFAULT_MESSAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_MESSAGE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** How long an acknowledged message is kept before retention removes it. */
+export const MESSAGE_TTL_MS = configuredDuration(
+  'AGENT_BOARD_MESSAGE_TTL_MS',
+  DEFAULT_MESSAGE_TTL_MS,
+);
+
+/**
+ * Hard ceiling on message age. Mail that is never acknowledged (an agent died,
+ * a channel member never came back) would otherwise grow without bound, so it
+ * is dropped once it is this old regardless of acknowledgement state.
+ */
+export const MESSAGE_MAX_AGE_MS = configuredDuration(
+  'AGENT_BOARD_MESSAGE_MAX_AGE_MS',
+  DEFAULT_MESSAGE_MAX_AGE_MS,
+);
+
+/** Rows removed per retention pass, so a sweep never blocks the write path. */
+export const MESSAGE_PRUNE_BATCH = 500;
 
 /** Remove identities whose agent processes can no longer be assumed to exist. */
 function pruneExpiredAgents(): void {
@@ -515,6 +557,65 @@ export function listActivity(query: { repo?: string; limit?: number } = {}): Act
     .all(limit) as unknown as Activity[];
 }
 
+/**
+ * SQL expression (over an aliased `messages m`) that flags a message as still
+ * awaiting acknowledgement. Direct mail is unread until `acked_at` is set; a
+ * channel message is unread while any current member other than the sender has
+ * no row in `message_acks`. The `'#'` literal mirrors {@link CHANNEL_PREFIX}.
+ */
+const UNREAD_EXPR = `CASE WHEN m.recipient LIKE '#%' THEN
+  EXISTS (
+    SELECT 1 FROM channel_members cm
+    WHERE cm.channel_id = substr(m.recipient, 2)
+      AND cm.agent <> m.sender
+      AND NOT EXISTS (
+        SELECT 1 FROM message_acks a WHERE a.message_id = m.id AND a.agent = cm.agent
+      )
+  )
+ELSE m.acked_at IS NULL END`;
+
+const MESSAGE_SELECT = `SELECT m.*, (${UNREAD_EXPR}) AS unread FROM messages m`;
+
+/** Turn a raw message row into the API shape, normalising `unread` to boolean. */
+function toMessage(row: unknown): MailMessage {
+  const record = row as MailMessage & { unread: number | boolean };
+  return { ...record, unread: Boolean(record.unread) };
+}
+
+/** Fetch one message with its unread flag, or `undefined` if it is gone. */
+function getMessage(id: number): MailMessage | undefined {
+  const row = db().prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id);
+  return row ? toMessage(row) : undefined;
+}
+
+/**
+ * Delete mail that has outlived the retention policy: acknowledged messages
+ * older than {@link MESSAGE_TTL_MS}, plus anything older than
+ * {@link MESSAGE_MAX_AGE_MS} whether acknowledged or not. Each pass is bounded
+ * to `limit` rows so retention never turns into a long-running write. Per-agent
+ * acknowledgements cascade with the message. Returns the number of rows removed.
+ */
+export function pruneMessages(options: { limit?: number } = {}): number {
+  const limit = Math.min(Math.max(options.limit ?? MESSAGE_PRUNE_BATCH, 1), 5_000);
+  const ts = now();
+  const result = db()
+    .prepare(
+      `DELETE FROM messages WHERE id IN (
+         SELECT m.id FROM messages m
+         WHERE m.created_at < @max_age_cutoff
+            OR (m.created_at < @ttl_cutoff AND (${UNREAD_EXPR}) = 0)
+         ORDER BY m.id ASC
+         LIMIT @limit
+       )`,
+    )
+    .run({
+      ttl_cutoff: ts - MESSAGE_TTL_MS,
+      max_age_cutoff: ts - MESSAGE_MAX_AGE_MS,
+      limit,
+    });
+  return Number(result.changes);
+}
+
 /** Store a message for an active agent. Delivery is pull-based through its inbox. */
 export function sendMessage(input: {
   sender: string;
@@ -523,6 +624,9 @@ export function sendMessage(input: {
   thread_id?: string;
 }): SendMessageResult {
   pruneExpiredAgents();
+  // Retention runs opportunistically on the write path; it is bounded, so the
+  // cost per send stays flat no matter how much old mail has accumulated.
+  pruneMessages();
   const exists = isChannelRecipient(input.recipient)
     ? db()
         .prepare(`SELECT 1 FROM channels WHERE id = ?`)
@@ -537,32 +641,107 @@ export function sendMessage(input: {
        VALUES (?, ?, ?, ?, ?)`,
     )
     .run(input.sender, input.recipient, input.body, input.thread_id?.trim() || null, now());
-  return {
-    ok: true,
-    message: db()
-      .prepare(`SELECT * FROM messages WHERE id = ?`)
-      .get(Number(result.lastInsertRowid)) as unknown as MailMessage,
-  };
+  return { ok: true, message: getMessage(Number(result.lastInsertRowid))! };
 }
 
-/** Read the shared message transcript in chronological order. */
-export function listMessages(
-  input: {
-    after_id?: number;
-    limit?: number;
-  } = {},
-): MailMessage[] {
+/** Filters for the shared transcript. All of them combine with AND. */
+export interface MessageQuery {
+  after_id?: number;
+  limit?: number;
+  /** Free-text match across body, sender, recipient, and thread. */
+  q?: string;
+  /** Exact thread id, so one conversation can be followed on its own. */
+  thread_id?: string;
+  /** Only messages this agent sent or received (channel token counts too). */
+  agent?: string;
+  /** Only messages still awaiting acknowledgement. */
+  unread_only?: boolean;
+}
+
+/**
+ * Read the shared message transcript in chronological order, newest `limit`
+ * messages first selected then re-sorted ascending so cursors advance naturally.
+ */
+export function listMessages(input: MessageQuery = {}): MailMessage[] {
   const limit = Math.min(Math.max(input.limit ?? 200, 1), 200);
+  const clauses = ['m.id > @after_id'];
+  const params: Record<string, string | number> = {
+    after_id: input.after_id ?? 0,
+    limit,
+  };
+  const q = input.q?.trim();
+  if (q) {
+    clauses.push(
+      `(m.body LIKE @like OR m.sender LIKE @like OR m.recipient LIKE @like
+        OR IFNULL(m.thread_id, '') LIKE @like)`,
+    );
+    params['like'] = `%${q}%`;
+  }
+  const threadId = input.thread_id?.trim();
+  if (threadId) {
+    clauses.push('m.thread_id = @thread_id');
+    params['thread_id'] = threadId;
+  }
+  const agent = input.agent?.trim();
+  if (agent) {
+    clauses.push('(m.sender = @agent OR m.recipient = @agent)');
+    params['agent'] = agent;
+  }
+  if (input.unread_only) {
+    clauses.push(`(${UNREAD_EXPR}) = 1`);
+  }
+  return (
+    db()
+      .prepare(
+        `SELECT * FROM (
+           ${MESSAGE_SELECT}
+           WHERE ${clauses.join(' AND ')}
+           ORDER BY m.id DESC
+           LIMIT @limit
+         ) ORDER BY id ASC`,
+      )
+      .all(params) as unknown[]
+  ).map(toMessage);
+}
+
+/** Summarise conversation threads, most recently active first. */
+export function listThreads(input: { limit?: number } = {}): MessageThread[] {
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
   return db()
     .prepare(
-      `SELECT * FROM (
-         SELECT * FROM messages
-         WHERE id > @after_id
-         ORDER BY id DESC
-         LIMIT @limit
-       ) ORDER BY id ASC`,
+      `SELECT thread_id,
+              COUNT(*) AS messages,
+              SUM(unread) AS unread,
+              MAX(created_at) AS last_at
+         FROM (
+           SELECT m.thread_id AS thread_id,
+                  m.created_at AS created_at,
+                  (${UNREAD_EXPR}) AS unread
+             FROM messages m
+            WHERE m.thread_id IS NOT NULL
+         )
+        GROUP BY thread_id
+        ORDER BY last_at DESC
+        LIMIT @limit`,
     )
-    .all({ after_id: input.after_id ?? 0, limit }) as unknown as MailMessage[];
+    .all({ limit }) as unknown as MessageThread[];
+}
+
+/**
+ * Pending message counts per recipient token, for unread badges in the UI.
+ * Recipients with nothing pending are omitted.
+ */
+export function unreadCounts(): UnreadCount[] {
+  return db()
+    .prepare(
+      `SELECT recipient, COUNT(*) AS unread FROM (
+         SELECT m.recipient AS recipient, (${UNREAD_EXPR}) AS unread FROM messages m
+       )
+       WHERE unread = 1
+       GROUP BY recipient
+       ORDER BY unread DESC, recipient ASC`,
+    )
+    .all() as unknown as UnreadCount[];
 }
 
 /** Read an agent inbox in ascending order so cursors advance naturally. */
@@ -577,9 +756,10 @@ export function readInbox(input: {
   // member of (excluding its own). Direct messages track "handled" via
   // acked_at; channel messages are shared rows, so per-agent acks live in
   // message_acks. The '#' literal mirrors CHANNEL_PREFIX.
-  return db()
-    .prepare(
-      `SELECT m.* FROM messages m
+  return (
+    db()
+      .prepare(
+        `${MESSAGE_SELECT}
        WHERE m.id > @after_id
          AND (
            m.recipient = @agent
@@ -603,13 +783,42 @@ export function readInbox(input: {
          )
        ORDER BY m.id ASC
        LIMIT @limit`,
+      )
+      .all({
+        agent: input.agent,
+        after_id: input.after_id ?? 0,
+        include_acknowledged: input.include_acknowledged ? 1 : 0,
+        limit,
+      }) as unknown[]
+  ).map(toMessage);
+}
+
+/** How many messages are still pending in one agent's inbox. */
+export function countInbox(agent: string): number {
+  const row = db()
+    .prepare(
+      `SELECT COUNT(*) AS pending FROM messages m
+        WHERE (
+          m.recipient = @agent
+          OR (
+            m.sender != @agent
+            AND m.recipient IN (
+              SELECT '#' || channel_id FROM channel_members WHERE agent = @agent
+            )
+          )
+        )
+        AND (
+          (m.recipient = @agent AND m.acked_at IS NULL)
+          OR (
+            m.recipient != @agent
+            AND NOT EXISTS (
+              SELECT 1 FROM message_acks a WHERE a.message_id = m.id AND a.agent = @agent
+            )
+          )
+        )`,
     )
-    .all({
-      agent: input.agent,
-      after_id: input.after_id ?? 0,
-      include_acknowledged: input.include_acknowledged ? 1 : 0,
-      limit,
-    }) as unknown as MailMessage[];
+    .get({ agent }) as unknown as { pending: number };
+  return row.pending;
 }
 
 /**
@@ -619,8 +828,7 @@ export function readInbox(input: {
  * Returns the message on success, or `undefined` if the agent may not ack it.
  */
 export function acknowledgeMessage(id: number, agent: string): MailMessage | undefined {
-  const message = db().prepare(`SELECT * FROM messages WHERE id = ?`).get(id) as unknown as
-    MailMessage | undefined;
+  const message = getMessage(id);
   if (!message) return undefined;
 
   if (isChannelRecipient(message.recipient)) {
@@ -632,13 +840,12 @@ export function acknowledgeMessage(id: number, agent: string): MailMessage | und
     db()
       .prepare(`INSERT OR IGNORE INTO message_acks (message_id, agent, acked_at) VALUES (?, ?, ?)`)
       .run(id, agent, now());
-    return message;
+    return getMessage(id);
   }
 
   if (message.recipient !== agent) return undefined;
   db().prepare(`UPDATE messages SET acked_at = COALESCE(acked_at, ?) WHERE id = ?`).run(now(), id);
-  return db().prepare(`SELECT * FROM messages WHERE id = ?`).get(id) as unknown as
-    MailMessage | undefined;
+  return getMessage(id);
 }
 
 // --- Channels ---------------------------------------------------------------

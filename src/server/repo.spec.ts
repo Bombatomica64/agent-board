@@ -267,6 +267,182 @@ describe('channels', () => {
   });
 });
 
+describe('mailbox visibility', () => {
+  it('reports unread counts per recipient and clears them on acknowledgement', () => {
+    repo.heartbeat({ name: 'unread-a' });
+    repo.heartbeat({ name: 'unread-b' });
+    const first = repo.sendMessage({ sender: 'human', recipient: 'unread-a', body: 'one' });
+    repo.sendMessage({ sender: 'human', recipient: 'unread-a', body: 'two' });
+    repo.sendMessage({ sender: 'human', recipient: 'unread-b', body: 'three' });
+    if (!first.ok) throw new Error('message was unexpectedly rejected');
+
+    const counts = new Map(repo.unreadCounts().map((row) => [row.recipient, row.unread]));
+    expect(counts.get('unread-a')).toBe(2);
+    expect(counts.get('unread-b')).toBe(1);
+    expect(first.message.unread).toBe(true);
+    expect(repo.countInbox('unread-a')).toBe(2);
+
+    repo.acknowledgeMessage(first.message.id, 'unread-a');
+
+    expect(
+      new Map(repo.unreadCounts().map((row) => [row.recipient, row.unread])).get('unread-a'),
+    ).toBe(1);
+    expect(repo.countInbox('unread-a')).toBe(1);
+  });
+
+  it('keeps a channel message unread until every member has acknowledged it', () => {
+    const created = repo.createChannel({ name: 'unread room', members: ['room-a', 'room-b'] });
+    if (!created.ok) throw new Error('channel was unexpectedly rejected');
+    const token = repo.channelRecipient(created.channel.id);
+    const sent = repo.sendMessage({ sender: 'human', recipient: token, body: 'roll call' });
+    if (!sent.ok) throw new Error('message was unexpectedly rejected');
+
+    const unreadFor = () =>
+      new Map(repo.unreadCounts().map((row) => [row.recipient, row.unread])).get(token) ?? 0;
+    expect(unreadFor()).toBe(1);
+
+    repo.acknowledgeMessage(sent.message.id, 'room-a');
+    expect(unreadFor()).toBe(1);
+
+    repo.acknowledgeMessage(sent.message.id, 'room-b');
+    expect(unreadFor()).toBe(0);
+  });
+
+  it('filters the transcript by text, thread, participant, and unread state', () => {
+    repo.heartbeat({ name: 'search-a' });
+    repo.heartbeat({ name: 'search-b' });
+    const inThread = repo.sendMessage({
+      sender: 'human',
+      recipient: 'search-a',
+      body: 'deploy the indexer',
+      thread_id: 'release-9',
+    });
+    repo.sendMessage({
+      sender: 'human',
+      recipient: 'search-b',
+      body: 'unrelated chatter',
+    });
+    if (!inThread.ok) throw new Error('message was unexpectedly rejected');
+    repo.acknowledgeMessage(inThread.message.id, 'search-a');
+
+    expect(repo.listMessages({ q: 'indexer' }).map((m) => m.id)).toEqual([inThread.message.id]);
+    expect(repo.listMessages({ thread_id: 'release-9' }).map((m) => m.id)).toEqual([
+      inThread.message.id,
+    ]);
+    expect(repo.listMessages({ agent: 'search-b' }).map((m) => m.body)).toEqual([
+      'unrelated chatter',
+    ]);
+    // The acknowledged message drops out of the unread view; its sibling stays.
+    expect(repo.listMessages({ unread_only: true, agent: 'search-a' })).toEqual([]);
+    expect(repo.listMessages({ unread_only: true, agent: 'search-b' })).toHaveLength(1);
+
+    const thread = repo.listThreads().find((entry) => entry.thread_id === 'release-9');
+    expect(thread).toMatchObject({ messages: 1, unread: 0 });
+  });
+
+  it('searches and lists threads through MCP tools', async () => {
+    const server = createMailboxMcpServer();
+    const client = new Client({ name: 'search-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    await client.callTool({ name: 'heartbeat', arguments: { agent: 'mcp-search' } });
+    await client.callTool({
+      name: 'send_message',
+      arguments: {
+        from: 'human',
+        to: 'mcp-search',
+        message: 'rotate the credentials',
+        thread_id: 'ops-42',
+      },
+    });
+    const found = await client.callTool({
+      name: 'search_messages',
+      arguments: { q: 'rotate', unread_only: true },
+    });
+    const threads = await client.callTool({ name: 'list_threads', arguments: {} });
+
+    expect(JSON.stringify(found.structuredContent)).toContain('rotate the credentials');
+    expect(JSON.stringify(threads.structuredContent)).toContain('ops-42');
+
+    await client.close();
+    await server.close();
+  });
+});
+
+describe('message retention', () => {
+  const backdate = (id: number, age: number) =>
+    database.prepare(`UPDATE messages SET created_at = ? WHERE id = ?`).run(Date.now() - age, id);
+
+  it('removes acknowledged mail past the TTL and keeps what is still pending', () => {
+    repo.heartbeat({ name: 'keep-me' });
+    const acked = repo.sendMessage({ sender: 'human', recipient: 'keep-me', body: 'old + acked' });
+    const pending = repo.sendMessage({ sender: 'human', recipient: 'keep-me', body: 'old + open' });
+    const fresh = repo.sendMessage({ sender: 'human', recipient: 'keep-me', body: 'recent' });
+    if (!acked.ok || !pending.ok || !fresh.ok) throw new Error('messages were rejected');
+    repo.acknowledgeMessage(acked.message.id, 'keep-me');
+    backdate(acked.message.id, repo.MESSAGE_TTL_MS + 1_000);
+    backdate(pending.message.id, repo.MESSAGE_TTL_MS + 1_000);
+
+    expect(repo.pruneMessages()).toBe(1);
+
+    const remaining = repo.listMessages({ agent: 'keep-me' }).map((m) => m.id);
+    expect(remaining).not.toContain(acked.message.id);
+    expect(remaining).toEqual(expect.arrayContaining([pending.message.id, fresh.message.id]));
+  });
+
+  it('drops never-acknowledged mail once it passes the hard age ceiling', () => {
+    repo.heartbeat({ name: 'ancient' });
+    const stale = repo.sendMessage({ sender: 'human', recipient: 'ancient', body: 'forgotten' });
+    if (!stale.ok) throw new Error('message was unexpectedly rejected');
+    backdate(stale.message.id, repo.MESSAGE_MAX_AGE_MS + 1_000);
+
+    expect(repo.pruneMessages()).toBe(1);
+    expect(repo.listMessages({ agent: 'ancient' })).toEqual([]);
+  });
+
+  it('bounds each sweep so retention never runs unboundedly', () => {
+    repo.heartbeat({ name: 'bulk' });
+    const ids: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const sent = repo.sendMessage({ sender: 'human', recipient: 'bulk', body: `bulk ${i}` });
+      if (!sent.ok) throw new Error('message was unexpectedly rejected');
+      ids.push(sent.message.id);
+    }
+    // Age them only once every send is done: sending sweeps opportunistically,
+    // so backdating inline would let the next send prune the earlier rows.
+    for (const id of ids) backdate(id, repo.MESSAGE_MAX_AGE_MS + 1_000);
+
+    expect(repo.pruneMessages({ limit: 2 })).toBe(2);
+    expect(repo.listMessages({ agent: 'bulk' })).toHaveLength(2);
+    expect(repo.pruneMessages({ limit: 2 })).toBe(2);
+    expect(repo.listMessages({ agent: 'bulk' })).toEqual([]);
+    expect(repo.pruneMessages()).toBe(0);
+  });
+
+  it('removes per-agent acknowledgements along with the message', () => {
+    const created = repo.createChannel({ name: 'retention room', members: ['ret-a', 'ret-b'] });
+    if (!created.ok) throw new Error('channel was unexpectedly rejected');
+    const sent = repo.sendMessage({
+      sender: 'human',
+      recipient: repo.channelRecipient(created.channel.id),
+      body: 'expiring',
+    });
+    if (!sent.ok) throw new Error('message was unexpectedly rejected');
+    repo.acknowledgeMessage(sent.message.id, 'ret-a');
+    repo.acknowledgeMessage(sent.message.id, 'ret-b');
+    backdate(sent.message.id, repo.MESSAGE_TTL_MS + 1_000);
+
+    expect(repo.pruneMessages()).toBe(1);
+    expect(
+      database
+        .prepare(`SELECT COUNT(*) AS acks FROM message_acks WHERE message_id = ?`)
+        .get(sent.message.id),
+    ).toEqual({ acks: 0 });
+  });
+});
+
 afterAll(() => {
   closeDatabase();
   rmSync(tempDir, { recursive: true, force: true });

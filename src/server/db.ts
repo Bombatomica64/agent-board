@@ -107,6 +107,14 @@ function migrate(db: DatabaseSyncType): void {
     CREATE INDEX IF NOT EXISTS idx_messages_inbox
       ON messages(recipient, acked_at, id);
 
+    -- Retention sweeps select the oldest mail first; without this they would
+    -- scan the whole table on every send.
+    CREATE INDEX IF NOT EXISTS idx_messages_created
+      ON messages(created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_thread
+      ON messages(thread_id);
+
     CREATE TABLE IF NOT EXISTS channels (
       id          TEXT PRIMARY KEY,
       name        TEXT NOT NULL,
