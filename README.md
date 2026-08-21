@@ -59,6 +59,7 @@ npm start               # ng serve with SSR + API on http://localhost:4200
 | `AGENT_BOARD_AGENT_TTL_MS`  | `86400000` (24 hours) | Retention window for addressable agents   |
 | `AGENT_BOARD_MESSAGE_TTL_MS` | `604800000` (7 days) | How long acknowledged mail is kept        |
 | `AGENT_BOARD_MESSAGE_MAX_AGE_MS` | `2592000000` (30 days) | Hard age ceiling for any message    |
+| `AGENT_BOARD_MCP_TOOLS` | `search`                | `search` advertises two discovery tools; `full` advertises all 19 |
 
 `localhost` and `127.0.0.1` are allowed out of the box. If you reach the board
 by another hostname (a LAN IP, a machine name), add it via `NG_ALLOWED_HOSTS`.
@@ -193,7 +194,26 @@ lists and can no longer receive new messages; historical messages remain.
 ## MCP tools
 
 The server exposes a stateless Streamable HTTP MCP endpoint at
-`http://localhost:<port>/mcp` with task-board and mailbox tools:
+`http://localhost:<port>/mcp`.
+
+By default the endpoint advertises **two** tools instead of all nineteen, so the
+board costs a client ~340 tokens of tool list rather than ~2000:
+
+| Tool           | Purpose                                                             |
+| -------------- | ------------------------------------------------------------------- |
+| `search_tools` | Find board tools by intent; returns names, descriptions, JSON Schemas |
+| `call_tool`    | Run one board tool by name with its arguments                        |
+
+`search_tools` takes an optional `query` (omit it to list everything) and returns
+each match's full input schema. `call_tool` validates arguments against that same
+schema, and a rejected call echoes the schema back so the caller can retry without
+a second lookup. Every tool name is also listed in the server `instructions` and in
+both tool descriptions, so a client that already knows what it wants can skip the
+search and go straight to `call_tool`.
+
+Set `AGENT_BOARD_MCP_TOOLS=full` to advertise every tool directly instead — useful
+for clients without tool-search of their own. The underlying tools are identical in
+both modes:
 
 | Tool                  | Purpose                                                                |
 | --------------------- | ---------------------------------------------------------------------- |

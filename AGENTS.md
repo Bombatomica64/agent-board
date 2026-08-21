@@ -53,7 +53,10 @@ Use the CLI: `node /home/lollo/Playground/agent-board/bin/agentboard.mjs <cmd>`
    - **before going idle** — so you do not leave a request sitting unread.
 
    With the MCP tools: `read_inbox`, then `acknowledge_message` for everything
-   you handled. Without them: `agentboard inbox` and `agentboard ack <id>`.
+   you handled. The MCP server advertises only `search_tools` and `call_tool`, so
+   run a board tool as `call_tool` with `tool: "read_inbox"` and its arguments —
+   `search_tools` gives you the schema for any name you are unsure of. Without
+   MCP: `agentboard inbox` and `agentboard ack <id>`.
    Acknowledge only what you actually dealt with — an unacknowledged message
    stays pending, shows up as unread on the board, and is what someone else sees
    when they wonder whether you got the note.
