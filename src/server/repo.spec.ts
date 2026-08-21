@@ -78,7 +78,7 @@ describe('mailbox', () => {
   });
 
   it('exposes send, read, and acknowledge through MCP tools', async () => {
-    const server = createMailboxMcpServer();
+    const server = createMailboxMcpServer({ mode: 'full' });
     const client = new Client({ name: 'mailbox-test', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -106,7 +106,7 @@ describe('mailbox', () => {
   });
 
   it('exposes the shared task board lifecycle through MCP tools', async () => {
-    const server = createMailboxMcpServer();
+    const server = createMailboxMcpServer({ mode: 'full' });
     const client = new Client({ name: 'board-test', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -143,7 +143,7 @@ describe('mailbox', () => {
   it('reports an MCP claim conflict as a tool error', async () => {
     const task = repo.createTask({ title: 'single owner' });
     repo.claimTask(task.id, 'alice');
-    const server = createMailboxMcpServer();
+    const server = createMailboxMcpServer({ mode: 'full' });
     const client = new Client({ name: 'conflict-test', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -239,7 +239,7 @@ describe('channels', () => {
   });
 
   it('creates, lists, and messages a channel through MCP tools', async () => {
-    const server = createMailboxMcpServer();
+    const server = createMailboxMcpServer({ mode: 'full' });
     const client = new Client({ name: 'channel-test', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -341,7 +341,7 @@ describe('mailbox visibility', () => {
   });
 
   it('searches and lists threads through MCP tools', async () => {
-    const server = createMailboxMcpServer();
+    const server = createMailboxMcpServer({ mode: 'full' });
     const client = new Client({ name: 'search-test', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -506,5 +506,166 @@ describe('task lifecycle integrity', () => {
     expect(repo.listTasks().map((item) => item.id)).not.toContain(task.id);
     expect(repo.listRecentlyCompleted().map((item) => item.id)).not.toContain(task.id);
     expect(repo.listArchivedTasks({ q: 'retention' }).map((item) => item.id)).toContain(task.id);
+  });
+});
+
+describe('mcp tool search mode', () => {
+  async function connectSearchClient() {
+    const server = createMailboxMcpServer({ mode: 'search' });
+    const client = new Client({ name: 'search-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    return { server, client };
+  }
+
+  it('advertises only the two discovery tools', async () => {
+    const { server, client } = await connectSearchClient();
+
+    const listed = await client.listTools();
+    expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['call_tool', 'search_tools']);
+
+    await client.close();
+    await server.close();
+  });
+
+  it('still advertises every tool in full mode', async () => {
+    const server = createMailboxMcpServer({ mode: 'full' });
+    const client = new Client({ name: 'full-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const listed = await client.listTools();
+    expect(listed.tools.map((tool) => tool.name)).toContain('claim_task');
+    expect(listed.tools.length).toBeGreaterThan(15);
+
+    await client.close();
+    await server.close();
+  });
+
+  it('ranks a searched intent onto the right tool and returns its schema', async () => {
+    const { server, client } = await connectSearchClient();
+
+    const found = await client.callTool({
+      name: 'search_tools',
+      arguments: { query: 'claim a task' },
+    });
+    const payload = found.structuredContent as {
+      tools: { name: string; inputSchema: { required?: string[] } }[];
+      all_tools: string[];
+    };
+
+    expect(payload.tools[0].name).toBe('claim_task');
+    expect(payload.tools[0].inputSchema.required?.sort()).toEqual(['agent', 'task_id']);
+    expect(payload.all_tools).toContain('read_inbox');
+
+    await client.close();
+    await server.close();
+  });
+
+  it('runs the full task lifecycle through call_tool', async () => {
+    const { server, client } = await connectSearchClient();
+
+    const posted = await client.callTool({
+      name: 'call_tool',
+      arguments: {
+        tool: 'post_task',
+        args: { title: 'dispatched task', repo: '/tmp/dispatch', agent: 'dana' },
+      },
+    });
+    const task = (posted.structuredContent as { task: { id: number } }).task;
+
+    const claimed = await client.callTool({
+      name: 'call_tool',
+      arguments: { tool: 'claim_task', args: { task_id: task.id, agent: 'dana' } },
+    });
+    const started = await client.callTool({
+      name: 'call_tool',
+      arguments: {
+        tool: 'set_task_status',
+        args: { task_id: task.id, status: 'in_progress', agent: 'dana' },
+      },
+    });
+
+    expect(claimed.isError).not.toBe(true);
+    expect(started.structuredContent).toMatchObject({
+      task: { id: task.id, status: 'in_progress', claimed_by: 'dana' },
+    });
+
+    await client.close();
+    await server.close();
+  });
+
+  it('dispatches a tool that takes no arguments', async () => {
+    const { server, client } = await connectSearchClient();
+
+    const result = await client.callTool({ name: 'call_tool', arguments: { tool: 'list_agents' } });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toHaveProperty('agents');
+
+    await client.close();
+    await server.close();
+  });
+
+  it('preserves tool-level errors through the dispatcher', async () => {
+    const task = repo.createTask({ title: 'dispatch conflict' });
+    repo.claimTask(task.id, 'erin');
+    const { server, client } = await connectSearchClient();
+
+    const result = await client.callTool({
+      name: 'call_tool',
+      arguments: { tool: 'claim_task', args: { task_id: task.id, agent: 'frank' } },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      reason: 'conflict',
+      task: { claimed_by: 'erin' },
+    });
+
+    await client.close();
+    await server.close();
+  });
+
+  it('returns the schema back when arguments fail validation', async () => {
+    const { server, client } = await connectSearchClient();
+
+    const result = await client.callTool({
+      name: 'call_tool',
+      arguments: { tool: 'claim_task', args: { task_id: -1 } },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      reason: 'invalid_arguments',
+      tool: 'claim_task',
+    });
+    expect(
+      (result.structuredContent as { inputSchema: { properties: Record<string, unknown> } })
+        .inputSchema.properties,
+    ).toHaveProperty('agent');
+
+    await client.close();
+    await server.close();
+  });
+
+  it('rejects an unknown tool with the full name list', async () => {
+    const { server, client } = await connectSearchClient();
+
+    const result = await client.callTool({
+      name: 'call_tool',
+      arguments: { tool: 'delete_everything', args: {} },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ reason: 'unknown_tool' });
+    expect(
+      (result.structuredContent as { all_tools: string[] }).all_tools,
+    ).toContain('post_task');
+
+    await client.close();
+    await server.close();
   });
 });
