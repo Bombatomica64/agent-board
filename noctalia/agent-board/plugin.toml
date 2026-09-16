@@ -1,0 +1,56 @@
+id = "lollo/agent-board"
+name = "Agent Board"
+version = "2.0.0"
+plugin_api = 9
+author = "Bombatomica64"
+license = "MIT"
+icon = "layout-dashboard"
+description = "Start and open the shared AI-agent bulletin board from the bar."
+tags = ["bar", "panel", "development", "docker"]
+dependencies = ["docker"]
+
+[[setting]]
+key = "board_url"
+type = "string"
+label_key = "settings.board_url.label"
+description_key = "settings.board_url.description"
+default = "http://localhost:4111"
+
+[[setting]]
+key = "compose_file"
+type = "string"
+label_key = "settings.compose_file.label"
+description_key = "settings.compose_file.description"
+default = "/home/lollo/Playground/agent-board/docker-compose.yml"
+
+[[setting]]
+key = "container_name"
+type = "string"
+label_key = "settings.container_name.label"
+description_key = "settings.container_name.description"
+default = "agent-board"
+
+[[setting]]
+key = "refresh_interval"
+type = "int"
+label_key = "settings.refresh_interval.label"
+description_key = "settings.refresh_interval.description"
+default = 5
+min = 2
+max = 60
+
+[[widget]]
+id = "agent-board"
+entry = "widget.luau"
+
+[[panel]]
+id = "controls"
+entry = "panel.luau"
+width = 320
+height = 260
+placement = "floating"
+open_near_click = true
+
+[[service]]
+id = "agent-board-service"
+entry = "service.luau"
